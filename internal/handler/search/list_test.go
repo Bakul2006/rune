@@ -796,6 +796,32 @@ func testListLeak(t *testing.T, constructor listConstructor) {
 }
 
 func TestListRemoveFocus(t *testing.T) {
+	t.Run("remove focus keeps indices aligned when matches are sorted", func(t *testing.T) {
+		l := NewList(ListConfig{Interrupter: term.NopInterrupter(), SyncSearch: true})
+		l.Resize(8, 4)
+		defer l.Close()
+
+		// "ab" ranks above "ba" for "a", so the list order is the
+		// reverse of the input order.
+		l.PushSync([]byte("ba"))
+		l.PushSync([]byte("ab"))
+		l.Buffer().WriteString("a")
+		l.FocusStart()
+		m, ok := l.Focus()
+		require.True(t, ok)
+		require.Equal(t, "ab", string(m.Data()))
+
+		require.True(t, l.RemoveFocus())
+		m, ok = l.Focus()
+		require.True(t, ok)
+		assert.Equal(t, "ba", string(m.Data()))
+		assert.Equal(t, 0, m.idx)
+		assert.Equal(t, 1, l.TotalCount())
+
+		require.True(t, l.RemoveFocus())
+		assert.Equal(t, 0, l.TotalCount())
+		assert.Equal(t, 0, l.MatchCount())
+	})
 	t.Run("remove focus removes item, shifts the ones below up and idices are continuos", func(t *testing.T) {
 		l := NewList(ListConfig{BottomSearchBar: true})
 		l.Resize(8, 4)

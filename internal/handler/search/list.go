@@ -327,21 +327,17 @@ func (l *List) RemoveFocus() bool {
 	match := listNode.Value().(searchResultComponent)
 	matchIdx := match.idx
 
-	nextNode, _ := listNode.Next()
-
 	// Remove the node on focus and shift focus if possible.
 	l.list.Remove(&listNode)
 
-	// Correct the rest of match results indices by shifting them, since we are
-	// removing one.
-	for nn := nextNode; ok; nn, ok = nn.Next() {
-		nv := nn.Value()
-		if nv == nil {
-			break
+	// Matches are sorted by score, so those built from later inputs can
+	// sit anywhere in the list.
+	for nn, ok := l.list.Front(); ok; nn, ok = nn.Next() {
+		match := nn.Value().(searchResultComponent)
+		if match.idx > matchIdx {
+			match.idx--
+			nn.SetValue(match)
 		}
-		match := nv.(searchResultComponent)
-		match.idx--
-		nn.SetValue(match)
 	}
 
 	// Align the `l.list` with the `l.input`.
