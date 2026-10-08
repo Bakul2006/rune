@@ -1404,6 +1404,67 @@ func TestCommandHandlerCancelsCompletionBeforeDispatch(t *testing.T) {
 		"completion context must be canceled before dispatcher runs")
 }
 
+func TestCommandHandlerDropsCompletionsOfPreviousInput(t *testing.T) {
+	cfg := testDefaultConfig()
+	cfg.ShowManual = false
+	cfg.Sync = false
+
+	buffered := make(chan struct{})
+	completer := FuncCompleter(func(
+		ctx context.Context, args []string,
+	) (iterator.Iterator[string], string, error) {
+		switch args[len(args)-1] {
+		case "a":
+			// The second candidate sits in the list's buffer, not yet shown,
+			// when the next keystroke replaces this completion.
+			stale := []string{"a/shown", "a/buffered"}
+			return iterator.FromFunc(func(ctx context.Context) (string, bool, error) {
+				if len(stale) > 0 {
+					next := stale[0]
+					stale = stale[1:]
+					return next, true, nil
+				}
+				close(buffered)
+				<-ctx.Done()
+				return "", false, nil
+			}, func() error { return nil }), "", nil
+		case "a/":
+			return iterator.FromSlice([]string{"a/fresh"}), "", nil
+		}
+		return iterator.Empty[string](), "", nil
+	})
+	b := NewPrompt(
+		storagestub.NewInMemoryService(), completer, FuncDispatcher(func(string, ...string) bool {
+			return false
+		}),
+		term.NopInterrupter(), testNoManualCommands([]string{"workspaceopen"}), cfg,
+	)
+	defer b.Close()
+	b.Resize(40, 10)
+
+	for _, ch := range "workspaceopen a" {
+		b.Handle(term.Event{Type: term.EventKey, Ch: ch})
+	}
+	<-buffered
+	b.Handle(term.Event{Type: term.EventKey, Ch: '/'})
+	b.Wait()
+
+	w := cell.NewBufferWriter(context.Background(), 40, 10)
+	b.Draw(w)
+	var screen strings.Builder
+	for _, row := range w.RawCells() {
+		for _, c := range row {
+			if c.Ch != 0 {
+				screen.WriteRune(c.Ch)
+			}
+		}
+		screen.WriteRune('\n')
+	}
+	assert.Contains(t, screen.String(), "a/fresh")
+	assert.NotContains(t, screen.String(), "a/buffered")
+	assert.NotContains(t, screen.String(), "a/shown")
+}
+
 func TestCommandHandlerIncArgsCompleteModeDoesNotDeadlock(t *testing.T) {
 	storage := storagestub.NewInMemoryService()
 	cfg := testDefaultConfig()

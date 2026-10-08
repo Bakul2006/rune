@@ -372,6 +372,32 @@ func TestPushOuterCancelDoesNotUnblockDrainEarly(t *testing.T) {
 	}
 }
 
+func TestDataResetDropsBufferedPush(t *testing.T) {
+	cfg := ListConfig{Interrupter: term.NopInterrupter()}
+	// Only the ticker and the batch size flush the consumer's buffer
+	// before cancel; keep both out of the way so "b" stays buffered.
+	cfg.interruptEvery = 24 * time.Hour
+	cfg.setFileCountEvery = 2
+	l := NewList(cfg)
+	defer l.Close()
+
+	ch := l.Push(context.Background())
+	ch <- []byte("a")
+	ch <- []byte("b")
+	require.Equal(t, 1, l.TotalCount())
+
+	l.DataReset()
+	l.Cancel()
+	l.Wait()
+	assert.Equal(t, 0, l.TotalCount())
+
+	ch = l.Push(context.Background())
+	ch <- []byte("c")
+	close(ch)
+	l.Wait()
+	assert.Equal(t, 1, l.TotalCount())
+}
+
 func focusIdx(t *testing.T, l *List) int {
 	t.Helper()
 	m, ok := l.Focus()

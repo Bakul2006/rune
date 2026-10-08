@@ -48,6 +48,10 @@ type List struct {
 	cancelPush    func()
 	height        int
 	width         int
+	// generation counts the times the data was discarded. A push
+	// consumer carries the value it started under, so elements it
+	// buffered before a discard are never appended after it.
+	generation int
 
 	cfg listConfig
 
@@ -183,8 +187,9 @@ func (l *List) Push(ctx context.Context) chan<- []byte {
 
 	datachan := make(chan []byte)
 	quitChan := l.quitChan
+	generation := l.generation
 	go debug.CapturePanicReport(func() {
-		l.consumeAsyncElements(ctx, cancelWait, datachan, quitChan)
+		l.consumeAsyncElements(ctx, cancelWait, generation, datachan, quitChan)
 	})
 	return datachan
 }
@@ -292,11 +297,14 @@ func (l *List) IterateVisible(fn func(Match)) {
 	})
 }
 
-// DataReset resets the current data list.
+// DataReset resets the current data list. Elements that a consumer
+// started by an earlier Push has received but not yet appended are
+// dropped with it, so Push must come after DataReset, never before.
 func (l *List) DataReset() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.cancelSearch()
+	l.generation++
 	l.input = nil
 	l.list.Reset()
 	l.userMovedFocus = false
@@ -463,6 +471,7 @@ func (l *List) Close() error {
 
 	l.cancelSearch()
 	l.cancelPush()
+	l.generation++
 	l.input = nil
 	l.list.Reset()
 	if l.quitChan == nil {
@@ -539,7 +548,7 @@ func (l *List) pushData(data [][]byte, slab *util.Slab, sortList bool) {
 }
 
 func (l *List) consumeAsyncElements(
-	ctx context.Context, cancel func(),
+	ctx context.Context, cancel func(), generation int,
 	datachan chan []byte, quitChan chan struct{},
 ) {
 	defer cancel()
@@ -554,7 +563,7 @@ func (l *List) consumeAsyncElements(
 	var dirty bool
 	sort := func() {
 		l.mu.Lock()
-		if !dirty {
+		if !dirty || l.generation != generation {
 			l.mu.Unlock()
 			return
 		}
@@ -571,14 +580,22 @@ func (l *List) consumeAsyncElements(
 	buf := make([][]byte, 0, l.cfg.setFileCountEvery)
 	slab := makeSlab()
 	pushData := func() {
-		if len(buf) > 0 {
-			l.mu.Lock()
-			l.pushData(buf, slab, false)
-			l.setFilesCount()
-			dirty = true
+		if len(buf) == 0 {
+			return
+		}
+		l.mu.Lock()
+		// A canceled ctx cannot stand in for this check: the Push
+		// barrier relies on a canceled consumer still flushing.
+		if l.generation != generation {
 			l.mu.Unlock()
 			buf = buf[:0]
+			return
 		}
+		l.pushData(buf, slab, false)
+		l.setFilesCount()
+		dirty = true
+		l.mu.Unlock()
+		buf = buf[:0]
 	}
 
 	go debug.CapturePanicReport(func() {
