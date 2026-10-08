@@ -19,6 +19,7 @@ package search
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -396,6 +397,31 @@ func TestDataResetDropsBufferedPush(t *testing.T) {
 	close(ch)
 	l.Wait()
 	assert.Equal(t, 1, l.TotalCount())
+}
+
+// A query edit starts a search without waiting for the one it cancels,
+// so toggling case sensitivity can overlap with a search still scanning.
+func TestListToggleCaseSensitivityDuringCanceledSearch(t *testing.T) {
+	l := NewList(ListConfig{Interrupter: term.NopInterrupter()})
+	defer l.Close()
+
+	// The overlap is short, so repeat it to give the race detector
+	// enough chances to catch the two accesses together.
+	for range 40 {
+		ch := l.Push(context.Background())
+		for i := range 5000 {
+			ch <- fmt.Appendf(nil, "element-%d", i)
+		}
+		close(ch)
+		l.Wait()
+
+		l.Buffer().WriteString("e")
+		l.DataReset()
+		l.Buffer().Reset()
+		l.ToggleCaseSensitivity()
+		l.Wait()
+		require.Equal(t, 0, l.TotalCount())
+	}
 }
 
 func focusIdx(t *testing.T, l *List) int {
@@ -1044,7 +1070,7 @@ func benchmarkHandleSearch(b *testing.B, n int, bottomSearchBar bool) {
 		l.waitSearchCtx, l.cancelSearch = context.WithCancel(ctx)
 		l.list.Reset()
 		l.mu.Unlock()
-		l.handleSearch(context.Background(), func() {}, data, "D")
+		l.handleSearch(context.Background(), func() {}, data, "D", false)
 		l.Draw(w)
 	}
 }

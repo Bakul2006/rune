@@ -639,7 +639,7 @@ func (l *List) getSearchQuery() string {
 
 func (l *List) handleSearch(
 	ctx context.Context, cancelFn func(), input [][]byte,
-	searchInput string,
+	searchInput string, caseSensitive bool,
 ) {
 	// defer cancel search context so Wait can rely on searchCtx
 	// to wait for search to be done. Cleanup resources
@@ -656,7 +656,7 @@ func (l *List) handleSearch(
 		Attributes:      l.cfg.textAttr,
 		TokenAttributes: l.cfg.matchedTextAttr,
 	}
-	search(l.cfg.algo, input, searchInput, slab, l.cfg.caseSensitive,
+	search(l.cfg.algo, input, searchInput, slab, caseSensitive,
 		func(match Match) {
 			template.Tokens = match.tokens
 			template.Data = match.data
@@ -726,13 +726,15 @@ func (l *List) asyncSearchLocked(ctx context.Context) {
 	input := make([][]byte, len(l.input))
 	copy(input, l.input)
 	searchInput := l.getSearchQuery()
+	// A later toggle may flip this while the search is still scanning.
+	caseSensitive := l.cfg.caseSensitive
 	// reset data now, so moving forward, all the prior input
 	// is managed by the goroutine below, and the new items are
 	// managed by the Push goroutine
 	l.list.Reset()
 	l.userMovedFocus = false
 	go debug.CapturePanicReport(func() {
-		l.handleSearch(ctx, cancelWait, input, searchInput)
+		l.handleSearch(ctx, cancelWait, input, searchInput, caseSensitive)
 	})
 }
 
@@ -749,7 +751,7 @@ func (l *List) syncSearchLocked(ctx context.Context) {
 	l.userMovedFocus = false
 	l.mu.Unlock()
 	defer l.mu.Lock()
-	l.handleSearch(ctx, cancelWait, input, searchInput)
+	l.handleSearch(ctx, cancelWait, input, searchInput, l.cfg.caseSensitive)
 }
 
 func (l *List) startSearchLocked(ctx context.Context) {
