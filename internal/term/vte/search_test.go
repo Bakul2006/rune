@@ -304,9 +304,6 @@ func TestVTESearchIsFindOnly(t *testing.T) {
 
 func newSearchHandler(t *testing.T, cfg Config) *Handler {
 	t.Helper()
-	if os.Getenv("CI") == "true" {
-		t.SkipNow()
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

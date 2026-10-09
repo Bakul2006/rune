@@ -4346,11 +4346,6 @@ func TestMoveWorkspace(t *testing.T) {
 }
 
 func TestExternalCommands(t *testing.T) {
-	// FIXME: flaky under CI; skipped until stabilized.
-	if ci := os.Getenv("CI"); ci == "true" {
-		t.SkipNow()
-	}
-
 	t.Run("happy path", func(t *testing.T) {
 		dir, err := os.MkdirTemp("", "")
 		require.NoError(t, err)

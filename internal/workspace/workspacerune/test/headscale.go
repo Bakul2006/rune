@@ -47,9 +47,6 @@ var headscaleConfigTemplate string
 // SkipIfNoDocker skips the test when docker is not usable on this host.
 func SkipIfNoDocker(t *testing.T) {
 	t.Helper()
-	if os.Getenv("CI") == "true" {
-		t.SkipNow()
-	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
 	}

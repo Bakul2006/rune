@@ -83,10 +83,6 @@ var (
 
 func skipIfNoDocker(t *testing.T) {
 	t.Helper()
-	// Matches the other docker-driven suites, which CI runs elsewhere.
-	if os.Getenv("CI") == "true" {
-		t.SkipNow()
-	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
 	}

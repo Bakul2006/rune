@@ -50,12 +50,6 @@ import (
 // this timeout should be.
 var defaultWaitForIdleVte = 100 * time.Millisecond
 
-func init() {
-	if os.Getenv("CI") == "true" {
-		defaultWaitForIdleVte = 150 * time.Millisecond
-	}
-}
-
 func TestMain(m *testing.M) {
 	tmp, err := os.MkdirTemp("", "vte-home")
 	if err != nil {
@@ -593,12 +587,6 @@ func testSequenceCommand(
 	handler, err := NewHandler(chanEventPublisher{ch}, nopNotifications{},
 		scheme, scheme, nopTabManager{}, cfg)
 	require.NoError(t, err)
-
-	if ci := os.Getenv("CI"); ci == "true" {
-		// the version of sh running on the CI docker containers
-		// doesn't support bell (neither ctrl+g or ctrl+a + <-)
-		t.SkipNow()
-	}
 
 	t.Cleanup(func() {
 		handler.Close()

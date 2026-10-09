@@ -88,13 +88,6 @@ func TestWithoutBarCommand(t *testing.T) {
 }
 
 func TestPluginHandler(t *testing.T) {
-	if ci := os.Getenv("CI"); ci == "true" {
-		// it's inherently impossible to know when sh will actually
-		// have written in the vte's buffer; do not run
-		// on constrained environemnts.
-		t.SkipNow()
-	}
-
 	suite := []struct {
 		description    string
 		cmdAndArgs     string
