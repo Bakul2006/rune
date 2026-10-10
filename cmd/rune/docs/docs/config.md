@@ -66,7 +66,7 @@ and covers most of the configuration surface:
 - `editor.*`: mode, auto-save, tabspaces, comments, syntax size limits
 - `command.*`: prompt key, aliases, key bindings, history key, overlay
 - `syntax.*`, icons, frame and tab attributes, wallpaper
-- `terminal.*`, including the plugin bar
+- `terminal.*`, including the plugin bar and `terminal.clipboard`
 - `extensions`: every extension process is stopped and started again
 - `debugger.*` adapters and language-server settings
 - `workspace.symbol_db` and extension auto-authorize settings

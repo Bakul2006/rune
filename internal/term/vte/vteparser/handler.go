@@ -201,6 +201,12 @@ type Handler interface {
 	// ClipboardLoad loads data from the clipboard.
 	ClipboardLoad(register int, data string)
 
+	// RequestTermcap (XTGETTCAP) reports on the pty stream, for each of
+	// the terminfo capability names, the control sequence the terminal
+	// accepts for it, or that it has none. names holds at least one
+	// name.
+	RequestTermcap(names []string)
+
 	// Decaln runs the decaln routine.
 	Decaln()
 

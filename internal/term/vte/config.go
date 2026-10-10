@@ -32,6 +32,7 @@ func DefaultConfig() Config {
 	return Config{
 		Clipboard:                clipboard.NewInMemory(),
 		ClipboardRegister:        clipboard.DefaultRegisterID,
+		ClipboardAccess:          ClipboardAccess{Write: true},
 		ScheduleNextTick:         func(cb func()) bool { cb(); return true },
 		RingBell:                 func() {},
 		SelectionAttributes:      term.Attributes{Attrs: term.AttrReverse},
@@ -49,6 +50,9 @@ type Config struct {
 	CommandAndArgs    []string
 	Clipboard         clipboard.Register
 	ClipboardRegister string
+	// ClipboardAccess is what the program may do with Clipboard through
+	// the OSC 52 escape sequence. The zero value lets it do nothing.
+	ClipboardAccess ClipboardAccess
 
 	// ScheduleNextTick schedules an arbitrary function to be run
 	// in the next event-loop tick.
@@ -128,6 +132,18 @@ type Config struct {
 	// serves, when known. A t=t graphics transmission is deleted after
 	// it is read only from there, /tmp or /dev/shm.
 	TempDir string
+}
+
+// ClipboardAccess is what a program running in the terminal may do
+// with the clipboard through the OSC 52 escape sequence. Anything the
+// program writes to the terminal, including the output of a command it
+// runs on a remote host, can carry the sequence.
+type ClipboardAccess struct {
+	// Write lets the program replace the clipboard contents.
+	Write bool
+	// Read lets the program query the clipboard contents, which the
+	// terminal then sends back to it.
+	Read bool
 }
 
 // SearchConfig configures the terminal's scrollback search. The box is

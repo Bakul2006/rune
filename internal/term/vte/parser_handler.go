@@ -50,11 +50,12 @@ const (
 )
 
 type parserHandler struct {
-	pty       workspaceapi.Pty
-	clipboard clipboard.Register
-	tm        browser.TabManager
-	bell      func()
-	sync      struct {
+	pty             workspaceapi.Pty
+	clipboard       clipboard.Register
+	clipboardAccess ClipboardAccess
+	tm              browser.TabManager
+	bell            func()
+	sync            struct {
 		mu      sync.Locker
 		buf     screenBuffer
 		primBuf *vtescreen.PrimaryBuffer
@@ -1369,6 +1370,10 @@ func (t *parserHandler) ConfigureCharset(
 
 // Store data into the clipboard.
 func (t *parserHandler) ClipboardStore(register int, data []byte) {
+	if !t.clipboardAccess.Write {
+		t.log(log.DebugLevel, "ClipboardStore refused: the program may not write the clipboard")
+		return
+	}
 	d := base64.NewDecoder(base64.StdEncoding, bytes.NewReader(data))
 	decodedData, err := io.ReadAll(d)
 	if err != nil {
@@ -1393,6 +1398,10 @@ func (t *parserHandler) ClipboardStore(register int, data []byte) {
 
 // Load data from the clipboard.
 func (t *parserHandler) ClipboardLoad(register int, terminator string) {
+	if !t.clipboardAccess.Read {
+		t.log(log.DebugLevel, "ClipboardLoad refused: the program may not read the clipboard")
+		return
+	}
 	var data clipboard.Data
 	var err error
 	switch register {
@@ -1429,6 +1438,40 @@ func (t *parserHandler) ClipboardLoad(register int, terminator string) {
 			"for ClipboardLoad: %v", err)
 		return
 	}
+}
+
+// termcapMs is the terminfo Ms capability, the sequence that sets the
+// clipboard, in the source form terminfo databases and other terminals
+// report it in.
+const termcapMs = `\E]52;%p1%s;%p2%s\E\\`
+
+// RequestTermcap answers each name on its own, as the terminfo
+// capability for OSC 52 is the only one the terminal reports and
+// Neovim, which asks for it to decide whether to copy through OSC 52,
+// reads one capability per reply.
+func (t *parserHandler) RequestTermcap(names []string) {
+	var b bytes.Buffer
+	for _, name := range names {
+		value, ok := t.termcap(name)
+		if ok {
+			fmt.Fprintf(&b, "\x1bP1+r%x=%x\x1b\\", name, value)
+		} else {
+			fmt.Fprintf(&b, "\x1bP0+r%x\x1b\\", name)
+		}
+	}
+	if _, err := t.pty.Master.Write(b.Bytes()); err != nil {
+		t.log(log.WarnLevel, "write termcap reply to pty: %v", err)
+	}
+}
+
+// termcap returns the value of the named terminfo capability, when the
+// terminal supports it. Ms is reported only while programs may write
+// the clipboard, since it advertises exactly that.
+func (t *parserHandler) termcap(name string) (string, bool) {
+	if name == "Ms" && t.clipboardAccess.Write {
+		return termcapMs, true
+	}
+	return "", false
 }
 
 // Run the decaln routine.

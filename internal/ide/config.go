@@ -4384,6 +4384,37 @@ func (c ideConfig) terminalDebug() (ret bool) {
 	return c.terminalBool("debug")
 }
 
+// terminalClipboardAccess reads terminal.clipboard.write and .read.
+// Programs may write the clipboard unless told otherwise, since tools
+// such as tmux and vim copy through it, but reading it hands whatever
+// the user last copied to any program whose output reaches a
+// terminal, so that is off until the user opts in.
+func (c ideConfig) terminalClipboardAccess() vte.ClipboardAccess {
+	ret := vte.DefaultConfig().ClipboardAccess
+	cfg, ok := c.terminal()
+	if !ok {
+		return ret
+	}
+	clip, err := cfg.GetConfig("clipboard")
+	if err != nil {
+		if err != config.ErrNotFound {
+			c.errors["terminal.clipboard"] = err
+		}
+		return ret
+	}
+	for key, dst := range map[string]*bool{"write": &ret.Write, "read": &ret.Read} {
+		v, err := clip.GetBool(key)
+		if err != nil {
+			if err != config.ErrNotFound {
+				c.errors["terminal.clipboard."+key] = err
+			}
+			continue
+		}
+		*dst = v
+	}
+	return ret
+}
+
 func (c ideConfig) tabNameSeparator() (ret string) {
 	ret = "  "
 	cfg, ok := c.browser()
@@ -4416,6 +4447,7 @@ func (c ideConfig) terminalConfig() vte.Config {
 	ret.Debug = c.terminalDebug()
 	ret.CommandAndArgs = c.terminalShell()
 	ret.Clipboard = c.clipboard()
+	ret.ClipboardAccess = c.terminalClipboardAccess()
 	ret.ScheduleNextTick = c.scheduleNextTick
 	ret.RingBell = c.ringBell
 	ret.CellPixelSize = c.cellPixelSize

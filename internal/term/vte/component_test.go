@@ -1822,3 +1822,14 @@ func (discardNotifications) UpdateNotificationProgress(
 ) error {
 	return nil
 }
+
+func TestComponentPassesClipboardAccessToTheParser(t *testing.T) {
+	cfg := DefaultConfig()
+	assert.Equal(t, ClipboardAccess{Write: true}, cfg.ClipboardAccess,
+		"programs may set the clipboard but not read it unless configured")
+	cfg.ClipboardAccess = ClipboardAccess{Write: true, Read: true}
+	comp, err := NewComponent(&testExecutor{}, &testExecutor{}, &mockTabManager{}, cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = comp.Close() })
+	assert.Equal(t, cfg.ClipboardAccess, comp.parserHandler.clipboardAccess)
+}

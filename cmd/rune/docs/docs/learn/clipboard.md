@@ -91,6 +91,43 @@ with `set mouse=a`, clicks and drags go to that program instead and the
 terminal does not highlight or copy. Use the program's own copy command,
 such as yanking to the `+` register in vim.
 
+## Programs in the terminal
+
+A program running in a terminal can set the clipboard itself through
+the OSC 52 escape sequence, which is how tmux, vim and similar tools
+copy from inside a terminal, including over SSH. The same sequence can
+also ask the terminal for the clipboard contents.
+
+Both are controlled by `terminal.clipboard`:
+
+```yaml tab
+terminal:
+  clipboard:
+    write: true # programs may set the clipboard
+    read: false # programs may read the clipboard
+```
+
+```python tab
+config["terminal"]["clipboard"] = {
+    "write": True, # programs may set the clipboard
+    "read": False, # programs may read the clipboard
+}
+```
+
+Writing is on by default. Reading is off by default: anything whose
+output reaches a terminal can send the sequence, such as a file you
+`cat`, a build log or a command on a remote host, and a read hands it
+whatever you last copied, which may be a password or a token. Turn it
+on only if a tool you trust needs it, and bear in mind that writing
+still lets such output replace what you were about to paste.
+
+Programs that ask the terminal whether it accepts OSC 52 (the `Ms`
+capability, queried with XTGETTCAP) are told so while writing is
+allowed. Neovim 0.11 asks on startup and, when it finds no clipboard
+tool of its own, as is common on a remote host, copies through OSC 52
+without any configuration. With writing off, the terminal reports no
+such capability and Neovim keeps its registers to itself.
+
 ## See also
 
 - [Vim editor](./vim-editor.md): registers and the `+` system clipboard register

@@ -161,6 +161,63 @@ func TestParserIntegration(t *testing.T) {
 				assert.Equal(t, CursorStyle{Shape: CursorShapeBeam, Blinking: false}, handler.cursorStyle)
 			},
 		},
+		{
+			"XTGETTCAP decodes the capability name",
+			[]byte("\x1bP+q4d73\x1b\\"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Equal(t, [][]string{{"Ms"}}, handler.termcapRequests)
+			},
+		},
+		{
+			"XTGETTCAP accepts uppercase hex",
+			[]byte("\x1bP+q4D73\x1b\\"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Equal(t, [][]string{{"Ms"}}, handler.termcapRequests)
+			},
+		},
+		{
+			"XTGETTCAP passes every name of one request together",
+			[]byte("\x1bP+q5463;524742;4d73\x1b\\"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Equal(t, [][]string{{"Tc", "RGB", "Ms"}}, handler.termcapRequests)
+			},
+		},
+		{
+			"XTGETTCAP skips a name that is not hex",
+			[]byte("\x1bP+q4d7;zz;4d73\x1b\\"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Equal(t, [][]string{{"Ms"}}, handler.termcapRequests)
+			},
+		},
+		{
+			"XTGETTCAP without a name asks for nothing",
+			[]byte("\x1bP+q\x1b\\"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Empty(t, handler.termcapRequests)
+			},
+		},
+		{
+			"XTGETTCAP ends at the string terminator",
+			[]byte("\x1bP+q4d73\x1b\\\x1bP+q5463\x1b\\"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Equal(t, [][]string{{"Ms"}, {"Tc"}}, handler.termcapRequests)
+			},
+		},
+		{
+			"DECRQSS is not a termcap request",
+			[]byte("\x1bP$qm\x1b\\"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Empty(t, handler.termcapRequests)
+			},
+		},
+		{
+			"printable text after XTGETTCAP is still input",
+			[]byte("\x1bP+q4d73\x1b\\a"),
+			func(t *testing.T, handler mockHandler) {
+				assert.Equal(t, [][]string{{"Ms"}}, handler.termcapRequests)
+				assert.Equal(t, []rune{'a'}, handler.input)
+			},
+		},
 	}
 
 	for _, test := range suite {
@@ -202,6 +259,8 @@ type mockHandler struct {
 	attrs            []*Attr
 	identityReported bool
 	cursorStyle      CursorStyle
+	termcapRequests  [][]string
+	input            []rune
 }
 
 func (m *mockHandler) init() {
@@ -210,6 +269,8 @@ func (m *mockHandler) init() {
 	m.attr = nil
 	m.attrs = make([]*Attr, 0)
 	m.identityReported = false
+	m.termcapRequests = nil
+	m.input = nil
 }
 
 func (m *mockHandler) TerminalAttribute(attr Attr) {
@@ -233,6 +294,14 @@ func (m *mockHandler) IdentifyTerminal(identifySecondary bool) {
 
 func (m *mockHandler) SetCursorStyle(style CursorStyle) {
 	m.cursorStyle = style
+}
+
+func (m *mockHandler) RequestTermcap(names []string) {
+	m.termcapRequests = append(m.termcapRequests, names)
+}
+
+func (m *mockHandler) Input(c rune) {
+	m.input = append(m.input, c)
 }
 
 func (m *mockHandler) resetState() {

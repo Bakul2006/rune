@@ -333,16 +333,22 @@ func (h loggingHandler) SetActiveCharset(index CharsetIndex) {
 
 func (h loggingHandler) ConfigureCharset(index CharsetIndex, charset StandardCharset) {
 	h.log("ConfigureCharset index=%v charset=%v", index, charset)
-
+	h.h.ConfigureCharset(index, charset)
 }
 
 func (h loggingHandler) ClipboardStore(register int, data []byte) {
 	h.log("ClipboardStore %d data=%d", register, len(data))
+	h.h.ClipboardStore(register, data)
 }
 
 func (h loggingHandler) ClipboardLoad(register int, data string) {
 	h.log("ClipboardLoad %d data=%d", register, len(data))
+	h.h.ClipboardLoad(register, data)
+}
 
+func (h loggingHandler) RequestTermcap(names []string) {
+	h.log("RequestTermcap %q", names)
+	h.h.RequestTermcap(names)
 }
 
 func (h loggingHandler) Decaln() {

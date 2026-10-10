@@ -18,6 +18,7 @@ package vteparser
 
 import (
 	"bytes"
+	"encoding/hex"
 	"strconv"
 	"strings"
 
@@ -71,7 +72,26 @@ type driver struct {
 	// dense attribute streams allocation-free.
 	sgrAttrs      []Attr
 	sgrHeadParams []uint16
+	// dcs is the kind of device control string being received and
+	// dcsData its bytes so far; the string is only acted on once
+	// complete, so an unterminated one is dropped.
+	dcs     dcsKind
+	dcsData []byte
 }
+
+// dcsKind is a device control string the driver understands.
+type dcsKind uint8
+
+const (
+	dcsIgnored dcsKind = iota
+	// dcsTermcap is XTGETTCAP, DCS + q Pt ST.
+	dcsTermcap
+)
+
+// maxDCSLength bounds the device control string the driver retains, a
+// termcap request being a few hex-encoded names. Anything longer is
+// dropped rather than retained in full.
+const maxDCSLength = 4096
 
 func newDriver(state *parserState, h Handler) *driver {
 	ret := new(driver)
@@ -113,16 +133,56 @@ func (p *driver) Execute(ch byte) {
 }
 
 func (p *driver) Hook(params [][]uint16, intermediates []byte, ignore bool, action rune) {
+	p.dcs = dcsIgnored
+	p.dcsData = p.dcsData[:0]
+	if !ignore && len(intermediates) == 1 && intermediates[0] == '+' && action == 'q' {
+		p.dcs = dcsTermcap
+		return
+	}
 	p.log(log.DebugLevel, "unhandled hook params=%v, ints: %v, ignore: %v, action: %v",
 		params, intermediates, ignore, action)
 }
 
 func (p *driver) Put(ch byte) {
+	if p.dcs != dcsIgnored {
+		if len(p.dcsData) < maxDCSLength {
+			p.dcsData = append(p.dcsData, ch)
+		} else {
+			p.dcs = dcsIgnored
+		}
+		return
+	}
 	p.log(log.DebugLevel, "unhandled put byte=%v", ch)
 }
 
 func (p *driver) Unhook() {
+	kind, data := p.dcs, p.dcsData
+	p.dcs = dcsIgnored
+	if kind == dcsTermcap {
+		p.requestTermcap(data)
+		return
+	}
 	p.log(log.DebugLevel, "unhandled unhook")
+}
+
+// requestTermcap decodes the hex-encoded, ;-separated capability names
+// of an XTGETTCAP request. A name that is not hex is skipped, so that
+// the others are still answered.
+func (p *driver) requestTermcap(data []byte) {
+	var names []string
+	for field := range bytes.SplitSeq(data, []byte(";")) {
+		name := make([]byte, hex.DecodedLen(len(field)))
+		n, err := hex.Decode(name, field)
+		if err != nil || n == 0 {
+			p.log(log.DebugLevel, "skipping termcap name %q: %v", field, err)
+			continue
+		}
+		names = append(names, string(name[:n]))
+	}
+	if len(names) == 0 {
+		return
+	}
+	p.handler.RequestTermcap(names)
 }
 
 func (p *driver) APCDispatch(data []byte) {

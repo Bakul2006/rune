@@ -949,6 +949,14 @@ config = {
         "selection_attr":     attr(flags = "reverse"),
         # Tab attributes used when a bell arrives while the window is unfocused.
         "needs_attention_attr": attr(fg = "red", flags = "blink"),
+        # What a program running in the terminal may do with the clipboard
+        # through the OSC 52 escape sequence. Reading hands whatever you last
+        # copied to any program whose output reaches a terminal, including
+        # one on a remote host, so it is off unless you opt in.
+        "clipboard": {
+            "write": True,
+            "read":  False,
+        },
         # Scrollback search, opened over the terminal itself. Its theme
         # follows editor.standard.search; only the key that opens it can be
         # overridden here.

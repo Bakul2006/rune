@@ -17,7 +17,15 @@
 package vte
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"maps"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1808,4 +1816,423 @@ func TestInsertDeleteLinesOnPrimaryScreen(t *testing.T) {
 			assert.Equal(t, tt.cursor, p.sync.buf.CursorAtScreen(), "the cursor stays put")
 		})
 	}
+}
+
+func TestClipboardOSC52(t *testing.T) {
+	t.Parallel()
+	const (
+		sel = selectionRegisterID
+		bel = "\x07"
+		st  = "\x1b\\"
+	)
+	clip := clipboard.DefaultRegisterID
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	errUnavailable := errors.New("clipboard unavailable")
+	cases := []struct {
+		name      string
+		registers map[string]string // held before the output
+		err       error             // returned by every clipboard operation
+		output    string
+		// want holds the registers after the output; nil means the output
+		// must leave them unchanged.
+		want  map[string]string
+		reply string
+	}{
+		// store
+		{
+			name:   "store c",
+			output: "\x1b]52;c;" + b64("hello") + bel,
+			want:   map[string]string{clip: "hello"},
+		},
+		{
+			name:   "store p",
+			output: "\x1b]52;p;" + b64("hello") + bel,
+			want:   map[string]string{sel: "hello"},
+		},
+		{
+			name:   "store s",
+			output: "\x1b]52;s;" + b64("hello") + bel,
+			want:   map[string]string{sel: "hello"},
+		},
+		{
+			name:   "store without a register selects c",
+			output: "\x1b]52;;" + b64("hello") + bel,
+			want:   map[string]string{clip: "hello"},
+		},
+		{
+			name:   "store terminated by ST",
+			output: "\x1b]52;c;" + b64("hello") + st,
+			want:   map[string]string{clip: "hello"},
+		},
+		{
+			name:   "store multiline text",
+			output: "\x1b]52;c;" + b64("one\ntwo\n") + bel,
+			want:   map[string]string{clip: "one\ntwo\n"},
+		},
+		{
+			name:   "store unicode text",
+			output: "\x1b]52;c;" + b64("héllo 🚀") + bel,
+			want:   map[string]string{clip: "héllo 🚀"},
+		},
+		{
+			name:      "store replaces the register",
+			registers: map[string]string{clip: "old"},
+			output:    "\x1b]52;c;" + b64("hello") + bel,
+			want:      map[string]string{clip: "hello"},
+		},
+		{
+			name:      "store c keeps the primary selection",
+			registers: map[string]string{sel: "kept"},
+			output:    "\x1b]52;c;" + b64("hello") + bel,
+			want:      map[string]string{clip: "hello", sel: "kept"},
+		},
+		{
+			name:      "store p keeps the clipboard",
+			registers: map[string]string{clip: "kept"},
+			output:    "\x1b]52;p;" + b64("hello") + bel,
+			want:      map[string]string{clip: "kept", sel: "hello"},
+		},
+		{
+			name:      "store empty data clears the register",
+			registers: map[string]string{clip: "old"},
+			output:    "\x1b]52;c;" + bel,
+			want:      map[string]string{clip: ""},
+		},
+		{
+			name:      "store invalid base64 is dropped",
+			registers: map[string]string{clip: "old"},
+			output:    "\x1b]52;c;not base64!" + bel,
+		},
+		{
+			name:   "store unknown register is dropped",
+			output: "\x1b]52;q;" + b64("hello") + bel,
+		},
+		{
+			name:   "store cut buffer is dropped",
+			output: "\x1b]52;0;" + b64("hello") + bel,
+		},
+		{
+			name:      "store without data is dropped",
+			registers: map[string]string{clip: "old"},
+			output:    "\x1b]52;c" + bel,
+		},
+		{
+			name:      "clipboard store error doesn't freeze the terminal",
+			registers: map[string]string{clip: "old"},
+			err:       errUnavailable,
+			output:    "\x1b]52;c;" + b64("hello") + bel,
+		},
+
+		// load
+		{
+			name:      "load c",
+			registers: map[string]string{clip: "hello"},
+			output:    "\x1b]52;c;?" + bel,
+			reply:     "\x1b]52;c;" + b64("hello") + bel,
+		},
+		{
+			name:      "load p",
+			registers: map[string]string{sel: "hello"},
+			output:    "\x1b]52;p;?" + bel,
+			reply:     "\x1b]52;p;" + b64("hello") + bel,
+		},
+		{
+			name:      "load s",
+			registers: map[string]string{sel: "hello"},
+			output:    "\x1b]52;s;?" + bel,
+			reply:     "\x1b]52;s;" + b64("hello") + bel,
+		},
+		{
+			name:      "load without a register selects c",
+			registers: map[string]string{clip: "hello"},
+			output:    "\x1b]52;;?" + bel,
+			reply:     "\x1b]52;c;" + b64("hello") + bel,
+		},
+		{
+			name:      "load replies with the ST terminator",
+			registers: map[string]string{clip: "hello"},
+			output:    "\x1b]52;c;?" + st,
+			reply:     "\x1b]52;c;" + b64("hello") + st,
+		},
+		{
+			name:      "load c ignores the primary selection",
+			registers: map[string]string{sel: "hello"},
+			output:    "\x1b]52;c;?" + bel,
+			reply:     "\x1b]52;c;" + bel,
+		},
+		{
+			name:      "load p ignores the clipboard",
+			registers: map[string]string{clip: "hello"},
+			output:    "\x1b]52;p;?" + bel,
+			reply:     "\x1b]52;p;" + bel,
+		},
+		{
+			name:   "load empty register",
+			output: "\x1b]52;c;?" + bel,
+			reply:  "\x1b]52;c;" + bel,
+		},
+		{
+			name:      "load multiline text",
+			registers: map[string]string{clip: "one\ntwo\n"},
+			output:    "\x1b]52;c;?" + bel,
+			reply:     "\x1b]52;c;" + b64("one\ntwo\n") + bel,
+		},
+		{
+			name:      "load unicode text",
+			registers: map[string]string{clip: "héllo 🚀"},
+			output:    "\x1b]52;c;?" + bel,
+			reply:     "\x1b]52;c;" + b64("héllo 🚀") + bel,
+		},
+		{
+			name:      "load unknown register is dropped",
+			registers: map[string]string{clip: "hello"},
+			output:    "\x1b]52;q;?" + bel,
+		},
+		{
+			name:      "clipboard load error doesn't freeze the terminal",
+			registers: map[string]string{clip: "hello"},
+			err:       errUnavailable,
+			output:    "\x1b]52;c;?" + bel,
+		},
+
+		// round trips
+		{
+			name:   "store c then load c",
+			output: "\x1b]52;c;" + b64("hello") + bel + "\x1b]52;c;?" + bel,
+			want:   map[string]string{clip: "hello"},
+			reply:  "\x1b]52;c;" + b64("hello") + bel,
+		},
+		{
+			name:   "store p then load s",
+			output: "\x1b]52;p;" + b64("hello") + bel + "\x1b]52;s;?" + bel,
+			want:   map[string]string{sel: "hello"},
+			reply:  "\x1b]52;s;" + b64("hello") + bel,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			uri, err := workspaceapi.ParseURI("memory:///osc52")
+			require.NoError(t, err)
+			registers := map[string]string{}
+			maps.Copy(registers, tc.registers)
+			want := tc.want
+			if want == nil {
+				want = maps.Clone(registers)
+			}
+			pty := &workspacetest.File{}
+			lock := new(lockCounter)
+			ph := newParserHandler(lock, workspaceapi.Pty{Master: pty, Slave: pty},
+				&mockTabManager{}, &registerClipboard{registers: registers, err: tc.err},
+				func() {}, uri, term.Attributes{}, false, 100, 0, nil, nil, "")
+			ph.clipboardAccess = ClipboardAccess{Write: true, Read: true}
+
+			vteparser.NewParser(ph, new(vteparser.StdTimeout)).AdvanceBytes([]byte(tc.output))
+
+			assert.Equal(t, want, registers)
+			assert.Equal(t, tc.reply, string(bytes.Join(pty.Writes, nil)))
+			assert.Zero(t, lock.held, "terminal lock left held")
+			assert.Zero(t, lock.stray, "terminal lock released without being held")
+		})
+	}
+}
+
+func TestClipboardOSC52Access(t *testing.T) {
+	t.Parallel()
+	const bel = "\x07"
+	clip := clipboard.DefaultRegisterID
+	b64 := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	store := "\x1b]52;c;" + b64("evil") + bel
+	load := "\x1b]52;c;?" + bel
+	cases := []struct {
+		name   string
+		access ClipboardAccess
+		output string
+		want   map[string]string
+		reply  string
+	}{
+		{
+			name:   "store is refused by default",
+			output: store,
+			want:   map[string]string{clip: "secret"},
+		},
+		{
+			name:   "load is refused by default",
+			output: load,
+			want:   map[string]string{clip: "secret"},
+		},
+		{
+			name:   "store is refused when only read is allowed",
+			access: ClipboardAccess{Read: true},
+			output: store,
+			want:   map[string]string{clip: "secret"},
+		},
+		{
+			name:   "load is refused when only write is allowed",
+			access: ClipboardAccess{Write: true},
+			output: load,
+			want:   map[string]string{clip: "secret"},
+		},
+		{
+			name:   "store is allowed by write",
+			access: ClipboardAccess{Write: true},
+			output: store,
+			want:   map[string]string{clip: "evil"},
+		},
+		{
+			name:   "load is allowed by read",
+			access: ClipboardAccess{Read: true},
+			output: load,
+			want:   map[string]string{clip: "secret"},
+			reply:  "\x1b]52;c;" + b64("secret") + bel,
+		},
+		{
+			name:   "a refused store does not reply",
+			output: store + load,
+			want:   map[string]string{clip: "secret"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			uri, err := workspaceapi.ParseURI("memory:///osc52")
+			require.NoError(t, err)
+			registers := map[string]string{clip: "secret"}
+			pty := &workspacetest.File{}
+			ph := newParserHandler(new(lockCounter), workspaceapi.Pty{Master: pty, Slave: pty},
+				&mockTabManager{}, &registerClipboard{registers: registers},
+				func() {}, uri, term.Attributes{}, false, 100, 0, nil, nil, "")
+			ph.clipboardAccess = tc.access
+
+			vteparser.NewParser(ph, new(vteparser.StdTimeout)).AdvanceBytes([]byte(tc.output))
+
+			assert.Equal(t, tc.want, registers)
+			assert.Equal(t, tc.reply, string(bytes.Join(pty.Writes, nil)))
+		})
+	}
+}
+
+func TestRequestTermcapAdvertisesOSC52(t *testing.T) {
+	t.Parallel()
+	const st = "\x1b\\"
+	hex := func(s string) string { return fmt.Sprintf("%x", s) }
+	msValue := `\E]52;%p1%s;%p2%s\E\\`
+	cases := []struct {
+		name   string
+		access ClipboardAccess
+		output string
+		reply  string
+	}{
+		{
+			name:   "Ms when programs may write the clipboard",
+			access: ClipboardAccess{Write: true},
+			output: "\x1bP+q" + hex("Ms") + st,
+			reply:  "\x1bP1+r" + hex("Ms") + "=" + hex(msValue) + st,
+		},
+		{
+			name:   "Ms when programs may not write the clipboard",
+			access: ClipboardAccess{Read: true},
+			output: "\x1bP+q" + hex("Ms") + st,
+			reply:  "\x1bP0+r" + hex("Ms") + st,
+		},
+		{
+			name:   "an unknown capability",
+			access: ClipboardAccess{Write: true},
+			output: "\x1bP+q" + hex("Tc") + st,
+			reply:  "\x1bP0+r" + hex("Tc") + st,
+		},
+		{
+			name:   "every name of a request is answered on its own",
+			access: ClipboardAccess{Write: true},
+			output: "\x1bP+q" + hex("Tc") + ";" + hex("Ms") + ";" + hex("RGB") + st,
+			reply: "\x1bP0+r" + hex("Tc") + st +
+				"\x1bP1+r" + hex("Ms") + "=" + hex(msValue) + st +
+				"\x1bP0+r" + hex("RGB") + st,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			uri, err := workspaceapi.ParseURI("memory:///xtgettcap")
+			require.NoError(t, err)
+			pty := &workspacetest.File{}
+			ph := newParserHandler(new(lockCounter), workspaceapi.Pty{Master: pty, Slave: pty},
+				&mockTabManager{}, clipboard.NewInMemory(),
+				func() {}, uri, term.Attributes{}, false, 100, 0, nil, nil, "")
+			ph.clipboardAccess = tc.access
+
+			vteparser.NewParser(ph, new(vteparser.StdTimeout)).AdvanceBytes([]byte(tc.output))
+
+			assert.Equal(t, tc.reply, string(bytes.Join(pty.Writes, nil)))
+		})
+	}
+}
+
+func TestRequestTermcapMsReadsAsOSC52ToNeovim(t *testing.T) {
+	t.Parallel()
+	uri, err := workspaceapi.ParseURI("memory:///xtgettcap")
+	require.NoError(t, err)
+	pty := &workspacetest.File{}
+	ph := newParserHandler(new(lockCounter), workspaceapi.Pty{Master: pty, Slave: pty},
+		&mockTabManager{}, clipboard.NewInMemory(),
+		func() {}, uri, term.Attributes{}, false, 100, 0, nil, nil, "")
+	ph.clipboardAccess = ClipboardAccess{Write: true}
+
+	ph.RequestTermcap([]string{"Ms"})
+
+	// vim.termcap.query: ^\027P1+r(%x+)(.*)$, then rest must be =%x+ and
+	// the value, with \E read as ESC and %pN removed, must start the OSC
+	// 52 sequence for runtime/plugin/osc52.lua to enable the provider.
+	reply := string(bytes.Join(pty.Writes, nil))
+	require.True(t, strings.HasPrefix(reply, "\x1bP1+r"), reply)
+	require.True(t, strings.HasSuffix(reply, "\x1b\\"), reply)
+	name, rest, ok := strings.Cut(strings.TrimSuffix(reply[len("\x1bP1+r"):], "\x1b\\"), "=")
+	require.True(t, ok, reply)
+	decodedName, err := hex.DecodeString(name)
+	require.NoError(t, err)
+	assert.Equal(t, "Ms", string(decodedName))
+	value, err := hex.DecodeString(rest)
+	require.NoError(t, err)
+	seq := strings.ReplaceAll(string(value), `\E`, "\x1b")
+	seq = regexp.MustCompile(`%p\d`).ReplaceAllString(seq, "")
+	assert.True(t, strings.HasPrefix(seq, "\x1b]52"), "%q", seq)
+}
+
+// registerClipboard keeps each register apart, as the clipboard Rune
+// configures does, so that a test tells which one a request reached.
+type registerClipboard struct {
+	registers map[string]string
+	err       error
+}
+
+func (c *registerClipboard) Copy(registerID string, data clipboard.Data) error {
+	if c.err != nil {
+		return c.err
+	}
+	c.registers[registerID] = data.Text
+	return nil
+}
+
+func (c *registerClipboard) Paste(registerID string) (clipboard.Data, error) {
+	if c.err != nil {
+		return clipboard.Data{}, c.err
+	}
+	return clipboard.Data{Text: c.registers[registerID]}, nil
+}
+
+// lockCounter stands in for the terminal lock so that releasing it
+// while nobody holds it fails the test: on a sync.Mutex that is a fatal
+// error, which would take down the test binary instead.
+type lockCounter struct {
+	held, stray int
+}
+
+func (l *lockCounter) Lock() { l.held++ }
+
+func (l *lockCounter) Unlock() {
+	if l.held == 0 {
+		l.stray++
+		return
+	}
+	l.held--
 }

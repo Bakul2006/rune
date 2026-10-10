@@ -239,6 +239,10 @@ func (h nopHandler) ClipboardLoad(register int, data string) {
 
 }
 
+func (h nopHandler) RequestTermcap(names []string) {
+
+}
+
 func (h nopHandler) Decaln() {
 
 }

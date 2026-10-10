@@ -340,6 +340,9 @@ terminal:
     modal: true
     dynamic_tab_name: true
     initial_reservoir: 0
+    clipboard:
+        write: false
+        read: true
     attr:
         fg: white
         bg: yellow
@@ -426,6 +429,7 @@ func assertDefaultConfig(t *testing.T, cfg *ideConfig) {
 	assertTerminalSearchConfig(t, &vteConfig, cfg.standardResultAttr(), selectAttr)
 	assert.Equal(t, vte.Config{
 		Clipboard:                cfg.clipboard(),
+		ClipboardAccess:          vte.ClipboardAccess{Write: true},
 		SelectionAttributes:      selectAttr,
 		NeedsAttentionAttributes: term.Attributes{Attrs: term.AttrBlink},
 		Modal:                    true,
@@ -803,6 +807,62 @@ func TestAuthorizerAutoAuthorize(t *testing.T) {
 			for _, key := range tc.wantErrKeys {
 				assert.Error(t, cfg.errors[key])
 			}
+		})
+	}
+}
+
+func TestTerminalClipboardAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal map[string]any
+		want     vte.ClipboardAccess
+		wantErr  string
+	}{
+		{
+			name: "unset lets programs write but not read",
+			want: vte.ClipboardAccess{Write: true},
+		},
+		{
+			name:     "empty clipboard section keeps the defaults",
+			terminal: map[string]any{"clipboard": map[string]any{}},
+			want:     vte.ClipboardAccess{Write: true},
+		},
+		{
+			name:     "read on",
+			terminal: map[string]any{"clipboard": map[string]any{"read": true}},
+			want:     vte.ClipboardAccess{Write: true, Read: true},
+		},
+		{
+			name:     "write off",
+			terminal: map[string]any{"clipboard": map[string]any{"write": false}},
+			want:     vte.ClipboardAccess{},
+		},
+		{
+			name:     "section is not a map",
+			terminal: map[string]any{"clipboard": "yes"},
+			want:     vte.ClipboardAccess{Write: true},
+			wantErr:  "terminal.clipboard",
+		},
+		{
+			name:     "read is not a bool",
+			terminal: map[string]any{"clipboard": map[string]any{"read": "yes"}},
+			want:     vte.ClipboardAccess{Write: true},
+			wantErr:  "terminal.clipboard.read",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := map[string]any{}
+			if tc.terminal != nil {
+				m["terminal"] = tc.terminal
+			}
+			cfg := &ideConfig{cfg: m, errors: map[string]error{}}
+			assert.Equal(t, tc.want, cfg.terminalClipboardAccess())
+			assert.Equal(t, tc.want, cfg.terminalConfig().ClipboardAccess)
+			if tc.wantErr == "" {
+				assert.Empty(t, cfg.errors)
+				return
+			}
+			assert.Error(t, cfg.errors[tc.wantErr])
 		})
 	}
 }
@@ -1517,6 +1577,7 @@ func TestConfigSetting(t *testing.T) {
 		Attributes:               term.Attributes{Fg: term.ColorWhite, Bg: term.ColorYellow},
 		Clipboard:                cfg.clipboard(),
 		ClipboardRegister:        clipboard.DefaultRegisterID,
+		ClipboardAccess:          vte.ClipboardAccess{Read: true},
 		SelectionAttributes:      term.Attributes{Fg: term.ColorGreen, Bg: term.ColorTeal},
 		NeedsAttentionAttributes: term.Attributes{Attrs: term.AttrBlink, Fg: term.ColorRed},
 		Modal:                    true,

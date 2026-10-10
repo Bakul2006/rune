@@ -66,6 +66,10 @@
 #  max_lines: 1000
 #  # Enable terminal modal mode on <esc>.
 #  modal: true
+#  # What programs in the terminal may do with the clipboard (OSC 52).
+#  clipboard:
+#    write: true
+#    read: false
 
 #workspace:
 #  auto_restore: true
