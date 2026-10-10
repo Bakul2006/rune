@@ -19,6 +19,7 @@ package idecmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/unstablebuild/rune-go-sdk/api/textapi"
 	"github.com/unstablebuild/rune-go-sdk/iterator"
@@ -152,17 +153,50 @@ func (e *Expander) ExpandAlias(
 }
 
 // expandLeaf returns a one-element iterator that yields cmd with its
-// args expanded via the env source. This is the path text.Component
-// used to take when dispatching a non-alias command.
+// args expanded via the env source. The args of ! and !! are expanded
+// as the shell line they become, so that a value lands in it as data.
 func (e *Expander) expandLeaf(
 	ctx context.Context, cmd textapi.Command,
 ) (iterator.Iterator[textapi.Command], error) {
-	out, err := e.expandArgs(ctx, cmd.Args)
+	var (
+		out []string
+		err error
+	)
+	if isPluginName(cmd.Name) {
+		out, err = e.expandPluginArgs(ctx, cmd.Args)
+	} else {
+		out, err = e.expandArgs(ctx, cmd.Args)
+	}
 	if err != nil {
 		return nil, err
 	}
 	cmd.Args = out
 	return iterator.FromSlice([]textapi.Command{cmd}), nil
+}
+
+// expandPluginArgs expands the args of a ! or !! command, which the
+// handler joins into one shell line, as that line. It yields the args
+// as given when no value is substituted, the words of the line when
+// the shell would pass them as written so the handler can still exec
+// the program directly, and otherwise the line as a single arg.
+func (e *Expander) expandPluginArgs(
+	ctx context.Context, args []string,
+) ([]string, error) {
+	if len(args) == 0 {
+		return args, nil
+	}
+	line := strings.Join(args, " ")
+	expanded, err := expandPluginBody(ctx, line, overlay(nil, e.env, ChainFromContext(ctx)))
+	if err != nil {
+		return nil, err
+	}
+	if expanded == line {
+		return args, nil
+	}
+	if fields, ok := cmdenv.PlainFields(expanded); ok {
+		return fields, nil
+	}
+	return []string{expanded}, nil
 }
 
 // expandArgs applies cmdenv.Expand to each dispatched arg using the
@@ -221,7 +255,17 @@ func (it *aliasIterator) Next(ctx context.Context) (textapi.Command, bool) {
 		}
 		out := it.template
 		out.Name = argv[0]
-		out.Args = append(argv[1:], it.remaining...)
+		remaining := it.remaining
+		if isPluginTarget(target) {
+			// The handler joins these into the shell line after
+			// the body, where they must be data as the body's
+			// substituted values are.
+			remaining = make([]string, len(it.remaining))
+			for i, a := range it.remaining {
+				remaining[i] = cmdenv.Quote(a)
+			}
+		}
+		out.Args = append(argv[1:], remaining...)
 		return out, true
 	}
 	return textapi.Command{}, false

@@ -6455,6 +6455,66 @@ func TestOpenURLPluginCommandQuotesURL(t *testing.T) {
 	}
 }
 
+func TestPluginArgsReachShellAsData(t *testing.T) {
+	const taint = "x; touch pwned"
+	t.Setenv("RUNE_TEST_TAINT", taint)
+	for _, tc := range []struct {
+		name    string
+		aliases map[string]text.CommandAlias
+		cmd     string
+		args    []string
+		want    []string
+	}{
+		{
+			name: "leaf ! arg",
+			cmd:  "!", args: []string{"grep", "-n", "$RUNE_TEST_TAINT"},
+			want: []string{"grep", "-n", taint},
+		},
+		{
+			name: "leaf ! arg glued to text",
+			cmd:  "!", args: []string{"grep", "--regexp=$RUNE_TEST_TAINT"},
+			want: []string{"grep", "--regexp=" + taint},
+		},
+		{
+			name:    "alias tail args",
+			aliases: map[string]text.CommandAlias{"g": {Commands: []string{"! grep -n"}}},
+			cmd:     "g", args: []string{"$RUNE_TEST_TAINT"},
+			want: []string{"grep", "-n", taint},
+		},
+		{
+			name:    "alias tail args after $1",
+			aliases: map[string]text.CommandAlias{"g": {Commands: []string{"! grep $1"}}},
+			cmd:     "g", args: []string{"-n", "$RUNE_TEST_TAINT"},
+			want: []string{"grep", "-n", taint},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newExForAliasRun(t, tc.aliases)
+			defer b.Close()
+			b.Resize(100, 100)
+			var got []string
+			b.ex.newPluginHandler = func(_ int, args ...string) (pluginHandler, error) {
+				got = append([]string(nil), args...)
+				return newTestVte(), nil
+			}
+
+			require.NoError(t, b.ex.dispatchCommand(tc.cmd, tc.args...))
+			b.ex.waitAsyncVTELoads()
+			b.flushScheduled()
+			b.drainAliasRuns()
+
+			require.Len(t, got, 3)
+			require.Equal(t, []string{"sh", "-c"}, got[:2])
+			line, err := shell.Fields(got[2], nil)
+			require.NoError(t, err)
+			require.Len(t, line, 1)
+			argv, err := shell.Fields(line[0], nil)
+			require.NoError(t, err, "the value must reach the shell as data: %s", line[0])
+			assert.Equal(t, tc.want, argv)
+		})
+	}
+}
+
 func TestShellInertURL(t *testing.T) {
 	parse := func(raw string) *url.URL {
 		u, err := url.Parse(raw)

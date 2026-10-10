@@ -45,6 +45,9 @@ command:
 `:gitblame 42,50` runs `git blame -L 42,50` on the focused file.
 Calling an alias with fewer arguments than it references is a dispatch
 error; use `${1:-default}` if the argument should be optional.
+Arguments the alias does not reference are appended to its last step,
+each as one argument: with `g: "! grep -n"`, `:g 'a b'` runs
+`grep -n 'a b'`.
 
 ## Multi-step aliases
 
@@ -382,7 +385,9 @@ unquoted, inside `"…"`, inside `'…'`, inside `$'…'`, in a here-document or
 value with whitespace, quotes or shell metacharacters therefore stays a single field and is
 never run, even when it comes from a file, a link or the output of an earlier step. Names that
 Rune does not know are left in the body unchanged; the shell interpreter then resolves them
-against the host environment (or the chain captures from earlier steps).
+against the host environment (or the chain captures from earlier steps). The same applies to
+a `!` or `!!` typed at the prompt or bound to a key, such as `:! grep -n $WORD $FILE`, and to
+the arguments an alias appends to a `!`/`!!` step.
 
 Some places in a shell line do not hold plain text, and Rune limits what it substitutes there:
 
