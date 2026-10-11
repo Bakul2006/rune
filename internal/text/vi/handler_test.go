@@ -11199,7 +11199,7 @@ func TestViGoPasteLeavesCursorAfterText(t *testing.T) {
 			clipboardText: "abc\n",
 			clipboardMode: text.LineSelection,
 			input:         "gp",
-			wantBuffer:    "abc\ndef\nxyz\nabc\n",
+			wantBuffer:    "abc\ndef\nxyz\nabc",
 			wantPosition:  term.Coordinates{X: 0, Y: 3},
 			wantCell:      'a',
 			wantCount:     1,
@@ -12128,7 +12128,7 @@ func TestScreenRelativeMotions(t *testing.T) {
 		{
 			name:          "M moves cursor to middle visible line",
 			inputSequence: "M",
-			expected:      "d\ne\n▐\ng",
+			expected:      "d\n▐\nf\ng",
 		},
 		{
 			name:          "L moves cursor to bottom visible line",
