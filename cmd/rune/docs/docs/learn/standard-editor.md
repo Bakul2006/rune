@@ -234,6 +234,10 @@ selects all the way to column zero, not only to the first non-blank character.
 
 Semantic selection depends on language support for the current buffer.
 
+As in VS Code, selecting the current line selects through the start of the
+next line, or to the end of the last line, and leaves the caret there; Shift
+with an arrow key then resizes that selection like any other.
+
 ## Cursor movement
 
 ### Common movement
@@ -364,9 +368,11 @@ left, and Delete removes the word to the right. `<ctrl-k>` starts a
 </Platform>
 
 Copy and cut use the current line when there is no selection. Copy leaves the
-buffer unchanged; cut removes the line. A later paste preserves the line-wise
-clipboard behavior. After pasting, repeat the clipboard-history key to replace
-that paste with progressively older clipboard-history entries.
+buffer and the selection unchanged; cut removes the line. A later paste
+preserves the line-wise clipboard behavior, inserting the line above the
+caret's line. After pasting, repeat the clipboard-history key to replace that
+paste with progressively older clipboard-history entries. Moving or duplicating
+lines leaves the clipboard alone.
 
 ### Undo and redo
 

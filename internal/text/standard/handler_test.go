@@ -733,18 +733,13 @@ type sublimeCase struct {
 
 const sublimeSnippet = "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"
 
-func sublimeSnippetPlus(add string) *string {
-	return new(sublimeSnippet + add)
-}
-
 func TestSublimeKeyBindingsMacOS(t *testing.T) {
-	spAll := sublimeSnippetPlus
 	suite := []sublimeCase{
 		// General editing
 		{"Cut (cuts entire line when nothing selected)", "<meta-x>", new("b\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
-		{"Copy+Paste", "<shift-right><meta-c><meta-v>", new("aa\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 1}, nil},
-		{"Copy+Paste and indent correctly", "<shift-right><meta-c><down><shift-meta-v>", new("a\nab\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 1, X: 1}, nil},
-		{"Paste from clipboard history", "<shift-right><meta-c><meta-v><meta-v><alt-meta-v>", new("aaa\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 2}, nil},
+		{"Copy+Paste", "<shift-right><meta-c><meta-v>", new(sublimeSnippet), term.Coordinates{Y: 0, X: 1}, nil},
+		{"Copy+Paste and indent correctly", "<shift-right><meta-c><down><shift-meta-v>", new("a\nba\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 1, X: 2}, nil},
+		{"Paste from clipboard history", "<shift-right><meta-c><esc><meta-v><meta-v><alt-meta-v>", new("aaa\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 3}, nil},
 		{"Undo", "<meta-x><meta-z>", new("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
 		{"Redo", "<meta-x><meta-z><shift-meta-z>", new("b\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
 		{"Redo or repeat last command", "<meta-x><meta-z><meta-y>", new("b\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
@@ -790,9 +785,9 @@ func TestSublimeKeyBindingsMacOS(t *testing.T) {
 		//{"Close current HTML/XML tag", "<alt-meta-.>", nil, term.Coordinates{}}, // No open tag
 
 		// Selection
-		{"Select all", "<meta-a><m-c>", nil, term.Coordinates{}, spAll("\n")},
-		{"Select entire line (repeat to select additional lines)", "<down><meta-l><meta-l><m-c>", nil, term.Coordinates{Y: 1, X: 0}, new("b\nc\n")},
-		{"Select word at cursor (repeat to select next occurrence)", "<meta-down>a<enter><meta-up><meta-d><meta-d><meta-d><meta-c>", nil, term.Coordinates{}, new("a")},
+		{"Select all", "<meta-a><m-c>", nil, term.Coordinates{Y: 10, X: 1}, new(sublimeSnippet)},
+		{"Select entire line (repeat to select additional lines)", "<down><meta-l><meta-l><m-c>", nil, term.Coordinates{Y: 3, X: 0}, new("b\nc\n")},
+		{"Select word at cursor (repeat to select next occurrence)", "<meta-down>a<enter><meta-up><meta-d><meta-d><meta-d><meta-c>", nil, term.Coordinates{X: 1}, new("a")},
 		//{"Select word at cursor (repeat to select next occurrence, multi cursor edits all)", "<meta-down>a<meta-up><meta-d><meta-c>", nil, term.Coordinates{Y: 10, X: 0}, sp("a")},
 		//{"Skip current selection, find and select next occurrence", "<meta-d><meta-k><meta-d>", nil, term.Coordinates{X: 0}, sp("a")},
 		//{"Select all occurrences of current selection", "<meta-d><ctrl-meta-g>", nil, term.Coordinates{}},
@@ -806,7 +801,7 @@ func TestSublimeKeyBindingsMacOS(t *testing.T) {
 		{"Expand selection to brackets", "{abc}<left><left><shift-left><ctrl-shift-m>", nil, term.Coordinates{X: 4}, nil},
 		//{"Expand selection to HTML/XML tag", "<shift-meta-a>", nil, term.Coordinates{}}, // No tags
 		{"Expand selection to scope", "<shift-meta-space>", nil, term.Coordinates{}, nil},
-		{"Expand selection to indentation level", "<shift-meta-j><m-c>", nil, term.Coordinates{}, spAll("\n")},
+		{"Expand selection to indentation level", "<shift-meta-j><m-c>", nil, term.Coordinates{Y: 10, X: 1}, new(sublimeSnippet)},
 
 		// Navigation and movement
 		{"Move to start of line", "<space><right><meta-left>", nil, term.Coordinates{Y: 0, X: 0}, nil},
@@ -961,13 +956,12 @@ func runSublimeSuite(t *testing.T, keymap Keymap, suite []sublimeCase) {
 }
 
 func TestSublimeKeyBindingsLinux(t *testing.T) {
-	spAll := sublimeSnippetPlus
 	runSublimeSuite(t, KeymapLinux, []sublimeCase{
 		// General editing
 		{"Cut (cuts entire line when nothing selected)", "<ctrl-x>", new("b\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
-		{"Copy+Paste", "<shift-right><ctrl-c><ctrl-v>", new("aa\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 1}, nil},
-		{"Copy+Paste and indent correctly", "<shift-right><ctrl-c><down><ctrl-shift-v>", new("a\nab\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 1, X: 1}, nil},
-		{"Paste from clipboard history", "<shift-right><ctrl-c><ctrl-v><ctrl-v><ctrl-k><ctrl-v>", new("aaa\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 2}, nil},
+		{"Copy+Paste", "<shift-right><ctrl-c><ctrl-v>", new(sublimeSnippet), term.Coordinates{Y: 0, X: 1}, nil},
+		{"Copy+Paste and indent correctly", "<shift-right><ctrl-c><down><ctrl-shift-v>", new("a\nba\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 1, X: 2}, nil},
+		{"Paste from clipboard history", "<shift-right><ctrl-c><esc><ctrl-v><ctrl-v><ctrl-k><ctrl-v>", new("aaa\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 3}, nil},
 		{"Undo", "<ctrl-x><ctrl-z>", new("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
 		{"Redo", "<ctrl-x><ctrl-z><ctrl-shift-z>", new("b\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
 		{"Redo or repeat last command", "<ctrl-x><ctrl-z><ctrl-y>", new("b\nc\nd\ne\nf\ng\nh\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
@@ -1000,12 +994,12 @@ func TestSublimeKeyBindingsLinux(t *testing.T) {
 		{"Wrap paragraph at ruler", "<ctrl-k><ctrl-q>", new("alpha beta\ngamma delta\nepsilon zeta\neta theta\n\ni\nj\nk"), term.Coordinates{Y: 0, X: 0}, nil},
 
 		// Selection
-		{"Select all", "<ctrl-a><ctrl-c>", nil, term.Coordinates{}, spAll("\n")},
-		{"Select entire line (repeat to select additional lines)", "<down><ctrl-l><ctrl-l><ctrl-c>", nil, term.Coordinates{Y: 1, X: 0}, new("b\nc\n")},
-		{"Select word at cursor (repeat to select next occurrence)", "<ctrl-end>a<enter><ctrl-home><ctrl-d><ctrl-d><ctrl-d><ctrl-c>", nil, term.Coordinates{}, new("a")},
+		{"Select all", "<ctrl-a><ctrl-c>", nil, term.Coordinates{Y: 10, X: 1}, new(sublimeSnippet)},
+		{"Select entire line (repeat to select additional lines)", "<down><ctrl-l><ctrl-l><ctrl-c>", nil, term.Coordinates{Y: 3, X: 0}, new("b\nc\n")},
+		{"Select word at cursor (repeat to select next occurrence)", "<ctrl-end>a<enter><ctrl-home><ctrl-d><ctrl-d><ctrl-d><ctrl-c>", nil, term.Coordinates{X: 1}, new("a")},
 		{"Expand selection to brackets", "{abc}<left><left><shift-left><ctrl-shift-m>", nil, term.Coordinates{X: 4}, nil},
 		{"Expand selection to scope", "<ctrl-shift-space>", nil, term.Coordinates{}, nil},
-		{"Expand selection to indentation level", "<ctrl-shift-j><ctrl-c>", nil, term.Coordinates{}, spAll("\n")},
+		{"Expand selection to indentation level", "<ctrl-shift-j><ctrl-c>", nil, term.Coordinates{Y: 10, X: 1}, new(sublimeSnippet)},
 
 		// Navigation and movement
 		{"Move to start of line", "<space><right><home>", nil, term.Coordinates{Y: 0, X: 0}, nil},
@@ -1174,11 +1168,14 @@ func TestSublimeSelectIndentationLevelKeyBinding(t *testing.T) {
 		wantModeOK  bool
 	}{
 		{
-			name:     "copies current indented block",
-			content:  "root\n\tb\n\tc\nroot2",
-			keys:     "<down><shift-meta-j><m-c>",
-			wantClip: "\tb\n\tc\n",
-			wantAt:   term.Coordinates{Y: 1},
+			name:       "copies current indented block",
+			content:    "root\n\tb\n\tc\nroot2",
+			keys:       "<down><shift-meta-j><m-c>",
+			wantClip:   "\tb\n\tc\n",
+			wantSel:    "\tb\n\tc\n",
+			wantAt:     term.Coordinates{Y: 3},
+			wantMode:   text.StandardSelection,
+			wantModeOK: true,
 		},
 		{
 			name:       "leaves line selection active after keybinding",
@@ -1379,7 +1376,7 @@ func TestPasteFromClipboardHistory(t *testing.T) {
 			content:     "ab\ncd",
 			wrapHistory: true,
 			steps: []pasteHistoryStep{
-				{input: "<shift-right><meta-c><right><shift-right><meta-c><end><meta-v>", wantHandled: true, wantContent: "abb\ncd"},
+				{input: "<shift-right><meta-c><esc><shift-right><meta-c><esc><meta-v>", wantHandled: true, wantContent: "abb\ncd"},
 				{input: "<alt-meta-v>", wantHandled: true, wantContent: "aba\ncd"},
 				{input: "<alt-meta-v>", wantHandled: true, wantContent: "aba\ncd"},
 			},
