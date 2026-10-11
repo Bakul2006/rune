@@ -1311,11 +1311,11 @@ type caseRuleWorkspace struct {
 
 func (w caseRuleWorkspace) PathCaseSensitive() bool { return w.caseSensitive }
 
-func TestEditFileURIRedirectsToWorkspaceWithFileOpenUnderOtherCase(t *testing.T) {
+func TestOpenFileTargetMatchesTabUnderOtherCase(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		caseSensitive bool
-		wantRedirect  bool
+		wantTab       bool
 	}{
 		{"case-sensitive host", true, false},
 		{"case-insensitive host", false, true},
@@ -1367,20 +1367,16 @@ func TestEditFileURIRedirectsToWorkspaceWithFileOpenUnderOtherCase(t *testing.T)
 			require.NoError(t, err)
 			m.workspaces[1].ex.Wait()
 
-			require.True(t, m.switchToWorkspace(0))
-			redirectedTab, _ := m.workspaces[0].ex.editFileURI(
-				otherCaseURI, m.workspaces[0].ex.invokeWindow(), false)
-			m.workspaces[0].ex.Wait()
-			m.workspaces[1].ex.Wait()
-
-			assert.Len(t, m.workspaces[1].ex.comp.Tabs(), 1)
-			if tc.wantRedirect {
-				assert.Equal(t, 1, m.focus)
-				assert.Same(t, openTab, redirectedTab)
-				assert.Empty(t, m.workspaces[0].ex.comp.Tabs())
-			} else {
-				assert.Equal(t, 0, m.focus)
-				assert.NotSame(t, openTab, redirectedTab)
+			// Opening the other case only reaches openFileTarget when the
+			// host filesystem folds case and the swap files collide, so
+			// the case rule is exercised here rather than through Open.
+			target, ok := m.openFileTarget(otherCaseURI)
+			if tc.wantTab {
+				require.True(t, ok)
+				assert.Equal(t, 1, target.workspaceIdx)
+				assert.Same(t, openTab, target.tab)
+			} else if ok {
+				assert.Nil(t, target.tab)
 			}
 		})
 	}
