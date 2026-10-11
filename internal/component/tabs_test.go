@@ -1225,3 +1225,148 @@ func TestTabsDrawRightPadding(t *testing.T) {
 		assert.Empty(t, l.layout.cells)
 	})
 }
+
+func TestTabsProgress(t *testing.T) {
+	focusAttr := term.Attributes{Fg: term.ColorWhite}
+	nonFocusAttr := term.Attributes{Fg: term.ColorBlue}
+	doneAttr := term.Attributes{Fg: term.ColorGreen, Attrs: term.AttrBold}
+	// "alphabet" is 8 cells wide, so each 12.5% is one cell.
+	for _, tc := range []struct {
+		name  string
+		pct   int
+		width int
+		// single leaves out the second tab and focuses the first.
+		single      bool
+		wantPainted int
+		wantShade   bool
+		wantShadeX  int
+		wantShadeW  int
+	}{
+		{name: "zero", pct: 0, width: 30, wantPainted: 0, wantShade: true, wantShadeX: 2, wantShadeW: 8},
+		{name: "half", pct: 50, width: 30, wantPainted: 4, wantShade: true, wantShadeX: 6, wantShadeW: 4},
+		{name: "rounds to nearest", pct: 30, width: 30, wantPainted: 2, wantShade: true, wantShadeX: 4, wantShadeW: 6},
+		{name: "full", pct: 100, width: 30, wantPainted: 8, wantShade: false},
+		{name: "clamped", pct: 250, width: 30, wantPainted: 8, wantShade: false},
+		{name: "focused", pct: 50, width: 30, single: true, wantPainted: 4, wantShade: true, wantShadeX: 6, wantShadeW: 4},
+		// At width 8 the tab draws "A alph" before the right pad: the
+		// bar is a fraction of the four drawn name cells, not of the
+		// full name.
+		{name: "truncated", pct: 50, width: 8, single: true, wantPainted: 2, wantShade: true, wantShadeX: 4, wantShadeW: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := NewTabs()
+			l.SetBorder(false)
+			l.SetAttr(focusAttr, nonFocusAttr, term.Attributes{}, term.Attributes{},
+				term.Attributes{}, term.Attributes{}, term.Attributes{})
+			l.Resize(tc.width, 1)
+			l.Add('A', "alphabet")
+			l.ResetFocus()
+			l.SetFocus(0)
+			base := focusAttr
+			if !tc.single {
+				l.Add('B', "b")
+				l.ResetFocus()
+				l.SetFocus(1)
+				base = nonFocusAttr
+			}
+			l.SetTabProgress(0, tc.pct, doneAttr)
+			pct, attr := l.TabProgress(0)
+			assert.Equal(t, max(0, min(100, tc.pct)), pct)
+			assert.Equal(t, doneAttr, attr)
+
+			w := term.NewStringWriter(tc.width, 1)
+			l.Draw(w)
+			cells := w.Cells()
+
+			painted := term.AttributesUnion(base, doneAttr)
+			_, nameW, _ := l.labelWidths(l.tabs[0], l.layout.cells[0].width)
+			require.Positive(t, nameW)
+			for i := range nameW {
+				c := cells[2+i]
+				assert.Equal(t, rune("alphabet"[i]), c.Ch, "cell %d", i)
+				if i < tc.wantPainted {
+					assert.Equal(t, painted, c.Attributes(), "cell %d painted", i)
+				} else {
+					assert.Equal(t, base, c.Attributes(), "cell %d plain", i)
+				}
+			}
+
+			offset, width, ok := l.TabShadeRect(0)
+			assert.Equal(t, tc.wantShade, ok)
+			if tc.wantShade {
+				assert.Equal(t, tc.wantShadeX, offset.X)
+				assert.Equal(t, tc.wantShadeW, width)
+			}
+
+			l.ResetTabProgress(0)
+			pct, attr = l.TabProgress(0)
+			assert.Equal(t, -1, pct)
+			assert.Equal(t, term.Attributes{}, attr)
+			w = term.NewStringWriter(tc.width, 1)
+			l.Draw(w)
+			assert.Equal(t, base, w.Cells()[2].Attributes(), "reset removes the paint")
+			rectOff, rectW, rectOK := l.TabRect(0)
+			shadeOff, shadeW, shadeOK := l.TabShadeRect(0)
+			assert.Equal(t, rectOK, shadeOK)
+			assert.Equal(t, rectOff, shadeOff)
+			assert.Equal(t, rectW, shadeW, "without progress the shade rect is the tab rect")
+		})
+	}
+}
+
+func TestTabsBadge(t *testing.T) {
+	badgeAttr := term.Attributes{Fg: term.ColorRed}
+	nonFocusAttr := term.Attributes{Fg: term.ColorBlue}
+	for _, tc := range []struct {
+		name   string
+		width  int
+		single bool
+		badge  string
+		want   string
+	}{
+		{name: "after the name", width: 30, badge: "²", want: "A main²  B b"},
+		{name: "wide badge", width: 30, badge: "¹²", want: "A main¹²  B b"},
+		{name: "none", width: 30, badge: "", want: "A main  B b"},
+		// Width 8 leaves the tab 6 cells before the right pad: the
+		// badge survives, the name loses its tail.
+		{name: "kept over the name tail", width: 8, single: true, badge: "²", want: "A mai²  "},
+		// A 2-cell tab holds the icon only, so the badge goes too.
+		{name: "dropped with the name", width: 4, single: true, badge: "²", want: "A   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := NewTabs()
+			l.SetBorder(false)
+			l.SetAttr(term.Attributes{}, nonFocusAttr, term.Attributes{}, term.Attributes{},
+				term.Attributes{}, term.Attributes{}, term.Attributes{})
+			l.Resize(tc.width, 1)
+			l.Add('A', "main")
+			l.ResetFocus()
+			l.SetFocus(0)
+			nameAttr := term.Attributes{}
+			if !tc.single {
+				l.Add('B', "b")
+				l.ResetFocus()
+				l.SetFocus(1)
+				nameAttr = nonFocusAttr
+			}
+			l.SetTabBadge(0, tc.badge, badgeAttr)
+			assert.Equal(t, 6+stringCellWidth(tc.badge), tabFullWidth(l.tabs[0]))
+
+			w := term.NewStringWriter(tc.width, 1)
+			l.Draw(w)
+			require.NoError(t, w.Flush())
+			assert.Equal(t, tc.want, w.String()[:len(tc.want)])
+			for i, c := range w.Cells() {
+				switch c.Ch {
+				case '¹', '²':
+					assert.Equal(t, badgeAttr, c.Attributes(), "badge cell %d", i)
+				case 'm':
+					assert.Equal(t, nameAttr, c.Attributes(), "name cell %d", i)
+				}
+			}
+
+			l.ResetTabBadge(0)
+			assert.Equal(t, 6, tabFullWidth(l.tabs[0]))
+		})
+	}
+}

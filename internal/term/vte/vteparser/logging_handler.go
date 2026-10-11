@@ -20,6 +20,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/unstablebuild/blue/logging"
 	"github.com/unstablebuild/rune-go-sdk/term/graphemecluster"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // HandlerWithLogging wraps a Handler and adds trace logging.
@@ -430,6 +431,21 @@ func (h loggingHandler) ReportModifyOtherKeys() {
 func (h loggingHandler) GraphicsCommand(data []byte) {
 	h.log("GraphicsCommand len(data)=%d", len(data))
 	h.h.GraphicsCommand(data)
+}
+
+func (h loggingHandler) ProgramStatus(report programstatus.Report) {
+	h.log("ProgramStatus %+v", report)
+	h.h.ProgramStatus(report)
+}
+
+func (h loggingHandler) ProgramStatusQuery(terminator string) {
+	h.log("ProgramStatusQuery %q", terminator)
+	h.h.ProgramStatusQuery(terminator)
+}
+
+func (h loggingHandler) PromptStart() {
+	h.log("PromptStart")
+	h.h.PromptStart()
 }
 
 func (h loggingHandler) log(line string, params ...any) {

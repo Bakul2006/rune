@@ -1218,4 +1218,34 @@ func TestExtensionIDStreamInterceptorTagsContext(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestExtensionIDUnaryInterceptorTagsContext(t *testing.T) {
+	t.Parallel()
+
+	ctx := auth.ContextWithClaims(context.Background(), auth.UserClaims[ideauthorizer.Extension]{
+		Extra: ideauthorizer.Extension{Metadata: extensionapi.Metadata{
+			ExtensionID: "test-extension",
+		}},
+	})
+
+	called := false
+	_, err := extensionIDUnaryInterceptor()(ctx, nil, &grpc.UnaryServerInfo{},
+		func(ctx context.Context, _ any) (any, error) {
+			called = true
+			extensionID, ok := processctx.ExtensionIDFromContext(ctx)
+			require.True(t, ok)
+			assert.Equal(t, "test-extension", extensionID)
+			return nil, nil
+		})
+	require.NoError(t, err)
+	assert.True(t, called)
+
+	_, err = extensionIDUnaryInterceptor()(context.Background(), nil, &grpc.UnaryServerInfo{},
+		func(ctx context.Context, _ any) (any, error) {
+			_, ok := processctx.ExtensionIDFromContext(ctx)
+			assert.False(t, ok, "an unauthenticated call is not tagged")
+			return nil, nil
+		})
+	require.NoError(t, err)
+}
+
 var _ extension.Runner = (*workspaceRunner)(nil)

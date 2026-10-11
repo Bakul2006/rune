@@ -184,3 +184,25 @@ func TestShadedTabsActiveRects(t *testing.T) {
 		{Offset: term.Coordinates{X: 2}, Width: 4, Height: 1},
 	}, s.activeRects(), "geometry follows the layout")
 }
+
+func TestShadedTabsActiveRectsSkipProgress(t *testing.T) {
+	active := []int{0, 1}
+	s := newTestShadedTabs(ShadedTabsConfig{
+		Active: func() []int { return active },
+	})
+	s.SetTabProgress(0, 40, term.Attributes{Fg: term.ColorGreen})
+	s.SetTabProgress(1, 100, term.Attributes{Fg: term.ColorGreen})
+	_ = drawShadedTabs(s)
+
+	assert.Equal(t, []shader.Rect{
+		{Offset: term.Coordinates{X: 4}, Width: 3, Height: 1},
+	}, s.activeRects(), "the effect runs over the unfinished part only")
+
+	s.ResetTabProgress(0)
+	s.ResetTabProgress(1)
+	_ = drawShadedTabs(s)
+	assert.Equal(t, []shader.Rect{
+		{Offset: term.Coordinates{X: 2}, Width: 5, Height: 1},
+		{Offset: term.Coordinates{X: 11}, Width: 4, Height: 1},
+	}, s.activeRects())
+}

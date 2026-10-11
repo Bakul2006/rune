@@ -25,6 +25,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"github.com/unstablebuild/rune-go-sdk/tui"
 	"unstable.build/rune/internal/browser"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 var _ browserapi.Browser = (*browserAdapter)(nil)
@@ -94,10 +95,14 @@ func (a browserAdapter) CloseWindow(
 	return bw.Close()
 }
 
-func (a browserAdapter) SetTabActivity(
-	uri workspaceapi.URI, active bool,
+func (a browserAdapter) SetTabStatus(
+	uri workspaceapi.URI, status browserapi.TabStatus,
 ) error {
-	return a.b.SetTabActivity(uri, active)
+	report, err := browser.ReportFromTabStatus(status, programstatus.HostApp)
+	if err != nil {
+		return err
+	}
+	return a.b.SetTabStatus(uri, report)
 }
 
 func (a browserAdapter) Interrupt(

@@ -27,6 +27,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/clipboard"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/cell"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte/vteparser"
 )
 
@@ -102,7 +103,11 @@ func (replayTabManager) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (replayTabManager) SetTabActivity(workspaceapi.URI, bool) error {
+func (replayTabManager) SetTabStatus(workspaceapi.URI, programstatus.Report) error {
+	return nil
+}
+
+func (replayTabManager) EndTabStatus(workspaceapi.URI) error {
 	return nil
 }
 

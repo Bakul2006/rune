@@ -268,7 +268,7 @@ config = {
         # duration string.
         "active_content_tab": {
             "enabled": True,
-            "shader":  "shine",
+            "shader":  "inferno",
             "fps":     10,
             "loop":    "1400ms",
         },
@@ -277,7 +277,7 @@ config = {
         # keys as active_content_tab.
         "active_workspace_tab": {
             "enabled": True,
-            "shader":  "shine",
+            "shader":  "inferno",
             "fps":     10,
             "loop":    "1400ms",
         },
@@ -753,6 +753,7 @@ config = {
             "tabnew":         "echo {prompt}edit<space>",
             "tabsearch":      "echo {prompt}tabfocus<space>",
             "workspacesearch":"echo {prompt}workspacefocus<space>",
+            "inbox":          "statuslist",
             "worktreenew": [
                 '!! ROOT=$(git rev-parse --git-common-dir) && ROOT=$(cd "$ROOT/.." && pwd) || exit 1',
                 '!! ROOT_HASH=$(printf %s "$ROOT" | (sha256sum 2>/dev/null || shasum -a 256) | cut -c1-4)',
@@ -956,6 +957,39 @@ config = {
         "clipboard": {
             "write": True,
             "read":  False,
+        },
+        # Program status (OSC 7501), as reported by programs such as
+        # `runectl status` or agent harnesses like claude code.
+        "status": {
+            "enabled":  True,
+            # Icons shown for a blocked tab by kind, and for done and error
+            # tabs. The defaults are Nerd Font glyphs.
+            "icons": {
+                "permission": "󰏥",
+                "question":   "󰋗",
+                "auth":       "󱐡",
+                "done":       "󰗠",
+                "error":      "󰅙",
+            },
+            "spinner":     "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
+            "spinner_fps": 10,
+            "idle_icon_attr":    attr(fg = "yellow"),
+            "working_icon_attr": attr(fg = "yellow"),
+            # Colour of the completed part of the name of a working tab.
+            "working_done_attr": attr(fg = "green"),
+            "blocked_attr":      attr(fg = "yellow"),
+            "blocked_icon_attr": attr(fg = "red"),
+            "done_attr":         attr(fg = "green"),
+            "done_icon_attr":    attr(fg = "silver"),
+            "error_attr":        attr(fg = "red"),
+            "error_icon_attr":   attr(fg = "yellow"),
+            # States a tab entering raises a notification for while it is out
+            # of sight, and the minimum time between two such notifications
+            # for the same tab. Every new message a program reports is
+            # notified on its own, whatever the state and whether or not the
+            # tab is in sight.
+            "notify":          ["blocked", "error", "done"],
+            "notify_interval": "2s",
         },
         # Scrollback search, opened over the terminal itself. Its theme
         # follows editor.standard.search; only the key that opens it can be

@@ -134,7 +134,7 @@ receives the tab URI and returns its content, a `browserapi.Handler`, the way
 placeholder's place, wherever the user keeps the tab by then, and closes it
 once the tab is closed; do not create the tab or install it into a window
 yourself. The URI remains the tab's identity, e.g. for
-`WindowManager.SetTabActivity`. A returned error is shown on the
+`WindowManager.SetTabStatus`. A returned error is shown on the
 placeholder, which the user can close, and a later registration, e.g. after
 a restart, is asked again. Only tabs that were shown in a tiled window are
 restored.

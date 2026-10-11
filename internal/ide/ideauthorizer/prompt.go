@@ -21,10 +21,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
-	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
+	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/handler"
 	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/browser"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // Permission prompt option labels shown in permission prompts.
@@ -38,24 +41,24 @@ const (
 type permissionPrompter struct {
 	promptOpener     PromptOpener
 	scheduleNextTick func(func()) bool
-	notifications    browserapi.Notifications
+	// status is told that a prompt awaits the user, under a uri of its
+	// own per prompt.
+	status    browser.TabManager
+	promptSeq atomic.Uint64
 }
 
 func newPermissionPrompter(
 	promptOpener PromptOpener,
 	scheduleNextTick func(func()) bool,
-	notifications browserapi.Notifications,
+	status browser.TabManager,
 ) *permissionPrompter {
 	if promptOpener == nil || scheduleNextTick == nil {
 		return nil
 	}
-	if notifications == nil {
-		notifications = nopPromptNotifications{}
-	}
 	return &permissionPrompter{
 		promptOpener:     promptOpener,
 		scheduleNextTick: scheduleNextTick,
-		notifications:    notifications,
+		status:           status,
 	}
 }
 
@@ -72,8 +75,9 @@ func (p *permissionPrompter) PromptPermission(
 		PromptOptionNoNever,
 	}
 	bindings := []term.KeyComb{{Ch: 'Y'}, {Ch: 'A'}, {Ch: 'N'}, {Ch: 'V'}}
+	statusURI := p.promptStatusURI()
 	scheduled := p.scheduleNextTick(func() {
-		_, _ = p.notifications.Notify(browserapi.LevelWarn, warning)
+		p.announce(statusURI, warning)
 		p.promptOpener.Prompt(message, options, bindings, handler.FuncPromptHandler(
 			func(i int, opt string) {
 				select {
@@ -93,12 +97,44 @@ func (p *permissionPrompter) PromptPermission(
 		return PermissionDenyOnce, nil
 	}
 
+	defer p.withdraw(statusURI)
 	select {
 	case decision := <-result:
 		return decision, nil
 	case <-ctx.Done():
 		return PermissionDenyOnce, ctx.Err()
 	}
+}
+
+func (p *permissionPrompter) promptStatusURI() workspaceapi.URI {
+	uri, err := workspaceapi.ParseURI(fmt.Sprintf("ideauthorizer:///prompt/%d", p.promptSeq.Add(1)))
+	if err != nil {
+		panic(err)
+	}
+	return uri
+}
+
+// announce tells the user a prompt awaits them as a blocked status.
+func (p *permissionPrompter) announce(uri workspaceapi.URI, warning string) {
+	report := programstatus.Report{
+		State: programstatus.Blocked, Kind: programstatus.KindPermission, Progress: -1,
+		App: programstatus.HostApp, Title: "Authorization", Msg: warning,
+	}
+	if normalized, err := programstatus.Normalize(report); err == nil {
+		report = normalized
+	} else {
+		report.Msg = ""
+	}
+	_ = p.status.SetTabStatus(uri, report)
+}
+
+// withdraw forgets the status announced under uri. It goes through the
+// tick so that it runs after the announcement, which may not have run
+// yet when the prompt is cancelled.
+func (p *permissionPrompter) withdraw(uri workspaceapi.URI) {
+	p.scheduleNextTick(func() {
+		_ = p.status.SetTabStatus(uri, programstatus.Report{State: programstatus.Clear})
+	})
 }
 
 func permissionPromptWarningMessage(req PermissionRequest) string {
@@ -373,26 +409,4 @@ func pluginPromptDecision(opt string) PermissionDecision {
 	default:
 		return PermissionDenyOnce
 	}
-}
-
-// nopPromptNotifications is used when no notifications implementation is
-// provided to newPermissionPrompter; it silently drops all notifications.
-type nopPromptNotifications struct{}
-
-func (nopPromptNotifications) Notify(
-	browserapi.NotificationLevel, string, ...any,
-) (string, error) {
-	return "", nil
-}
-
-func (nopPromptNotifications) NotifyOnce(
-	browserapi.NotificationLevel, string, ...any,
-) (string, error) {
-	return "", nil
-}
-
-func (nopPromptNotifications) UpdateNotificationProgress(
-	string, string, int64, int64,
-) error {
-	return nil
 }

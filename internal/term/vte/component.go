@@ -207,6 +207,10 @@ func (t *Component) Run(publisher browser.EventPublisher) error {
 	err := t.run(publisher)
 	if t.pid.Load() != 0 {
 		t.awaitExitStatus()
+		// What the process reported working or blocked on ends with it.
+		t.mu.Lock()
+		t.parserHandler.endStatus()
+		t.mu.Unlock()
 		_ = t.cfg.ScheduleNextTick(func() { t.tm.OnTabExit(t.uri) })
 	}
 	return err
@@ -946,6 +950,9 @@ func (t *Component) Close() (ret error) {
 	defer t.mu.Unlock()
 	if t.animTimer != nil {
 		t.animTimer.Stop()
+	}
+	if t.parserHandler != nil {
+		t.parserHandler.withdrawStatus()
 	}
 	if err := t.closeSlave(); err != nil {
 		ret = multierr.Append(ret, err)

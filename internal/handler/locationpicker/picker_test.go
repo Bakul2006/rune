@@ -448,7 +448,7 @@ func (stubWindowManager) Tab(workspaceapi.URI, rune, string, browserapi.Handler)
 func (stubWindowManager) SetWindowContent(browserapi.Window, browserapi.Handler) error { return nil }
 func (stubWindowManager) CloseWindow(browserapi.Window) error                          { return nil }
 
-func (stubWindowManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (stubWindowManager) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 type stubFS struct {
 	openFileFn func(string, int, os.FileMode) (workspaceapi.File, error)

@@ -2511,7 +2511,7 @@ func (m *mockWindowManager) CloseWindow(
 	return nil
 }
 
-func (m *mockWindowManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *mockWindowManager) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 type mockWindow struct{}
 

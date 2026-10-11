@@ -24,6 +24,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/component"
 	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 var _ component.Scrollable = (*Tab)(nil)
@@ -44,9 +45,14 @@ type Tab struct {
 	win         Window
 	subscribers []TabSubscriber
 	prev        *Tab
-	// active marks the tab as having work in progress. See
-	// Component.SetTabActivity.
-	active bool
+	// status is what the program behind the tab reported. See
+	// Component.SetTabStatus.
+	status programstatus.Summary
+	// records holds the reports status rolls up.
+	records *programstatus.Store
+	// attr is the name attribute set by callers. The status attribute
+	// is layered over it before it reaches the tab bar.
+	attr term.Attributes
 	// iconAttr is layered over the focus-dependent icon attributes.
 	// See Component.SetTabIconAttr.
 	iconAttr term.Attributes
@@ -62,8 +68,12 @@ func (b *Tab) Draw(w term.Writer) {
 	b.handler.Draw(w)
 }
 
-// Handle satisfies tui.Handler
+// Handle satisfies tui.Handler. A key event acknowledges the tab's
+// status, as the user is attending to it.
 func (b *Tab) Handle(ev term.Event) (exit, handled bool) {
+	if ev.Type == term.EventKey {
+		b.AckStatus()
+	}
 	innerExit, handled := b.handler.Handle(ev)
 	if innerExit {
 		b.parent.RemoveTab(b)
@@ -95,6 +105,19 @@ func (b *Tab) Close() error {
 // URI returns the identifier of this tab.
 func (b *Tab) URI() workspaceapi.URI {
 	return b.uri
+}
+
+// working reports whether the program behind this tab is working.
+func (b *Tab) working() bool {
+	return b.status.State == programstatus.Working
+}
+
+// AckStatus drops the done and error statuses of this tab, as the user
+// has seen it.
+func (b *Tab) AckStatus() {
+	if b.records.Ack() {
+		b.parent.refreshTabStatus(b)
+	}
 }
 
 // SetAttrs sets this tab's name and tab name attributes.
@@ -218,9 +241,11 @@ func (b *Tab) init(
 	b.closer = f
 	b.handler = h
 	b.free = true
+	b.records = programstatus.New()
 }
 
 func (b *Tab) callOnFocus() {
+	b.AckStatus()
 	for _, sub := range b.subscribers {
 		sub.OnFocus(b)
 	}

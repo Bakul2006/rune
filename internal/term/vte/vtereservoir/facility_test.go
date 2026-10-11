@@ -33,6 +33,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/component"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/browser/browsertest"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/workspace/workspacetest"
 )
@@ -657,7 +658,8 @@ func (nopBrowser) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (nopBrowser) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (nopBrowser) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (nopBrowser) EndTabStatus(workspaceapi.URI) error                       { return nil }
 
 func newTestFacility(
 	initCap int, newFn func(*Facility) (VTE, error),

@@ -294,7 +294,7 @@ func newEx(
 	return
 }
 
-// init initializes this ex with the given editor and Options.
+// init initializes this ex with the given editor and Options. tm is required.
 // It returns an error if an initial filepath was given through WithFilePath option
 // and the file failed to be opened.
 func (e *ex) init(
@@ -357,9 +357,6 @@ func (e *ex) init(
 	e.pendingTabs = newPendingTabOpener(e.bgCtx, &e.comp, e.notifications,
 		e.sched, extensionHandleWait)
 	e.editorObserver.onResourceOpener = e.pendingTabs.reopenAsync
-	if tm == nil {
-		tm = e.Browser()
-	}
 	e.tabAliases = newTabNameAliaser(tm, e.sched)
 	e.tm = failedTerminalKeeper{tabNameAliaser: e.tabAliases, e: e}
 	e.comp.SubscribeWindow((*windowSubscriber)(e))
@@ -2763,6 +2760,7 @@ func (e *ex) handleCommandEvent(ev term.Event) bool {
 }
 
 func (e *ex) onFocusChange(inFocus bool) {
+	e.comp.Browser().OnFocusChange(inFocus)
 	handler, _ := e.comp.Browser().Focus().Content()
 	onFocusChangeHandler(handler, inFocus)
 }
@@ -2778,6 +2776,7 @@ func (e *ex) handleEvent(ev term.Event) (
 
 	if inFocus := ev.Type == term.EventFocus; inFocus || ev.Type == term.EventUnfocus {
 		e.log(log.DebugLevel, "focus event: inFocus: %t", inFocus)
+		e.comp.Browser().OnFocusChange(inFocus)
 		handler, _ := e.invokeWindow().Content()
 		onFocusChangeHandler(handler, inFocus)
 		handled = true

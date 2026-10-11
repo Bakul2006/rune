@@ -97,7 +97,7 @@ func (w *fakeWindowManager) SetWindowContent(browserapi.Window, browserapi.Handl
 
 func (w *fakeWindowManager) CloseWindow(browserapi.Window) error { return nil }
 
-func (w *fakeWindowManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (w *fakeWindowManager) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 // realFS is a minimal workspaceapi.FileSystem backed by the OS and
 // rooted at a workspace directory. Relative paths resolve against root,

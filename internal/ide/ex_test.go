@@ -68,6 +68,7 @@ import (
 	"unstable.build/rune/internal/ide/console/ideconsole"
 	"unstable.build/rune/internal/ide/idehistory"
 	"unstable.build/rune/internal/ide/plugin"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/term/vte/vtereservoir"
 	"unstable.build/rune/internal/text"
@@ -2020,7 +2021,7 @@ func TestExKeySequence(t *testing.T) {
 				defer mu.Unlock()
 				ex.Handle(ev)
 				return true
-			}, 0, clipboard.NewInMemory(), nil, nil, nil, nil, testPromptEditor(), opts...))
+			}, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor(), opts...))
 		ex.subscribeCommands()
 		b := testEx{ex: ex}
 		closeFns = append(closeFns, func() error {
@@ -2163,7 +2164,7 @@ func newExSequencerHarness(
 			defer mu.Unlock()
 			ex.Handle(ev)
 			return true
-		}, 0, clipboard.NewInMemory(), nil, nil, nil, nil,
+		}, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil,
 		testPromptEditor(), opts...))
 	ex.subscribeCommands()
 
@@ -3336,7 +3337,9 @@ func (m *exSearchWindowManager) CloseWindow(win browserapi.Window) error {
 	return win.(browser.Window).Close()
 }
 
-func (m *exSearchWindowManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *exSearchWindowManager) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error {
+	return nil
+}
 
 func (t testEx) Handle(ev term.Event) (bool, bool) {
 	unlock := t.lock()
@@ -3580,7 +3583,7 @@ func newExForTestingTerminal(
 	scheduler, mu := installDefaultTestScheduler(&emulatorCfg)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, barCfg, publishEvent,
-		0, clipboard.NewInMemory(), nil, nil, nil, nil, testPromptEditor(), opts...))
+		0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor(), opts...))
 	ex.subscribeCommands()
 	return testEx{ex: ex, mu: mu, scheduler: scheduler}
 }
@@ -3613,7 +3616,7 @@ func newExForTestingVTECapacity(
 		}, ws, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
 		nopPublishEvent, initialVTECapacity, clipboard.NewInMemory(),
-		nil, nil, nil, nil, testPromptEditor(), opts...))
+		nil, nil, e.Browser(), nil, testPromptEditor(), opts...))
 	return testEx{ex: e, mu: mu, scheduler: scheduler}
 }
 
@@ -3768,7 +3771,7 @@ func newExForTestingWithWorkspace(
 	scheduler, mu := installDefaultTestScheduler(&emulatorCfg)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
-		publishEvent, 0, clip, nil, nil, nil, nil, testPromptEditor(), finalOpts...))
+		publishEvent, 0, clip, nil, nil, ex.Browser(), nil, testPromptEditor(), finalOpts...))
 	ex.subscribeCommands()
 	ex.newEmulatorHandler = func(args []string) (vtereservoir.VTE, error) {
 		return newTestVteWithConfig(args), nil
@@ -3807,7 +3810,7 @@ func newExForTestingCommandsPreview(
 	scheduler, mu := installDefaultTestScheduler(&emulatorCfg)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
-		publishEvent, 0, clip, nil, previews, nil, nil, testPromptEditor(), finalOpts...))
+		publishEvent, 0, clip, nil, previews, ex.Browser(), nil, testPromptEditor(), finalOpts...))
 	ex.subscribeCommands()
 	ex.newEmulatorHandler = func(args []string) (vtereservoir.VTE, error) {
 		return newTestVteWithConfig(args), nil
@@ -3857,7 +3860,7 @@ func newExForTestingWithStorage(
 
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
-		publishEvent, 0, clip, nil, nil, nil, nil, testPromptEditor(), finalOpts...))
+		publishEvent, 0, clip, nil, nil, ex.Browser(), nil, testPromptEditor(), finalOpts...))
 	ex.subscribeCommands()
 	ex.newEmulatorHandler = func(args []string) (vtereservoir.VTE, error) {
 		return newTestVteWithConfig(args), nil
@@ -5300,7 +5303,7 @@ func newExForReservoirTesting(
 	require.NoError(t, e.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return texttest.NopEditor(), nil }, ws, svc,
 		notifications, uri, emCfg, plugin.DefaultBarConfig(),
 		nopPublishEvent, initialCapacity, clipboard.NewInMemory(),
-		nil, nil, nil, nil, testPromptEditor(), finalOpts...))
+		nil, nil, e.Browser(), nil, testPromptEditor(), finalOpts...))
 	require.NoError(t, e.subscribeCommands())
 
 	// Wrap the closure created by init so we can observe which branch
@@ -5509,7 +5512,7 @@ func TestExUsesSharedIDEStorage(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return texttest.NopEditor(), nil }, workspace, storage,
 		notifications, uri, vte.DefaultConfig(), plugin.DefaultBarConfig(),
-		nopPublishEvent, 0, clipboard.NewInMemory(), nil, nil, nil, nil, testPromptEditor()))
+		nopPublishEvent, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor()))
 
 	require.Equal(t, 0, storage.partitionCalls)
 	require.Same(t, storage, ex.storage)
@@ -6132,6 +6135,56 @@ func TestTerminalOnFocus(t *testing.T) {
 		ex.tabclose(context.Background())
 		require.Len(t, tvte.onFocusChange, 9)
 		assert.False(t, tvte.onFocusChange[8])
+	})
+
+	t.Run("terminal tab status is acknowledged when seen", func(t *testing.T) {
+		uri, err := workspaceapi.ParseURI("memory:///")
+		require.NoError(t, err)
+		scheme, _ := workspace.NewMemoryScheme(context.Background(), config.NopConfig(), uri)
+		ex := newExForTestingWithWorkspace(t, workspace.NewSchemeWorkspace(uri, scheme, inlineSchedule),
+			texttest.NopEditor(), vte.DefaultConfig(), nopPublishEvent, clipboard.NewInMemory())
+		tvte := newTestVte()
+		ex.newEmulatorHandler = func([]string) (vtereservoir.VTE, error) { return tvte, nil }
+		t.Cleanup(func() { _ = ex.Close() })
+
+		ex.terminalnewtab(context.Background(), "echo", "bla")
+		tab, ok := ex.comp.FocusTab()
+		require.True(t, ok)
+		b := ex.comp.Browser()
+		report := func() {
+			t.Helper()
+			require.True(t, b.SetTabStatus(tab.URI(), programstatus.Report{
+				State: programstatus.Done, Progress: -1,
+			}))
+		}
+		state := func() programstatus.State {
+			status, ok := b.TabStatus(tab.URI())
+			require.True(t, ok)
+			return status.State
+		}
+
+		report()
+		assert.Equal(t, programstatus.Idle, state(), "reported in sight")
+
+		ex.editFiles(context.Background(), "a")
+		report()
+		assert.Equal(t, programstatus.Done, state(), "reported out of sight")
+		ex.tabprevious(context.Background())
+		assert.Equal(t, programstatus.Idle, state(), "shown again")
+
+		ex.windownew(context.Background())
+		report()
+		assert.Equal(t, programstatus.Done, state())
+		ex.windowfocus(context.Background(), "left")
+		assert.Equal(t, programstatus.Idle, state(), "its window took focus")
+
+		_, handled := ex.Handle(term.Event{Type: term.EventUnfocus})
+		require.True(t, handled)
+		report()
+		assert.Equal(t, programstatus.Done, state(), "the host terminal is out of focus")
+		_, handled = ex.Handle(term.Event{Type: term.EventFocus})
+		require.True(t, handled)
+		assert.Equal(t, programstatus.Idle, state(), "the host terminal regained focus")
 	})
 
 	t.Run("companion terminal", func(t *testing.T) {
@@ -8718,6 +8771,7 @@ func deterministicTaskBarConfig() plugin.BarConfig {
 type workspaceManagerMock struct {
 	workspace    *ex
 	attrs        map[workspaceapi.URI]term.Attributes
+	levels       map[workspaceapi.URI][]browserapi.NotificationLevel
 	wantFocusURI workspaceapi.URI
 	byURIHash    map[string]browserapi.Notifications
 }
@@ -8740,11 +8794,15 @@ func (w *workspaceManagerMock) focusURI() workspaceapi.URI {
 	return uri
 }
 
-func (w *workspaceManagerMock) setWorkspaceRequiresAttention(
-	uri workspaceapi.URI, attrs term.Attributes,
+func (w *workspaceManagerMock) addWorkspaceNotification(
+	uri workspaceapi.URI, level browserapi.NotificationLevel, attrs term.Attributes,
 ) {
 	if w.attrs == nil {
 		w.attrs = make(map[workspaceapi.URI]term.Attributes)
 	}
 	w.attrs[uri] = attrs
+	if w.levels == nil {
+		w.levels = make(map[workspaceapi.URI][]browserapi.NotificationLevel)
+	}
+	w.levels[uri] = append(w.levels[uri], level)
 }

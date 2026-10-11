@@ -1761,7 +1761,7 @@ func (m *fakeWM) Bar(browserapi.BarConfig, tui.Handler) error {
 
 func (m *fakeWM) CloseWindow(browserapi.Window) error { return nil }
 
-func (m *fakeWM) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *fakeWM) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 func TestNewREPLSubcommandOpensShell(t *testing.T) {
 	t.Parallel()

@@ -21,6 +21,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/tui"
 	"unstable.build/rune/internal/browser"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // routes calls to WindowManager to the current open workspace
@@ -82,10 +83,14 @@ func (c currentWorkspaceWindowManager) CloseWindow(win browserapi.Window) error 
 	return win.(browser.Window).Close()
 }
 
-// SetTabActivity marks the tab identified by uri in the current
-// workspace as active or idle.
-func (c currentWorkspaceWindowManager) SetTabActivity(
-	uri workspaceapi.URI, active bool,
+// SetTabStatus reports the status of the tab identified by uri in the
+// current workspace.
+func (c currentWorkspaceWindowManager) SetTabStatus(
+	uri workspaceapi.URI, status browserapi.TabStatus,
 ) error {
-	return c.root.focusBrowser().SetTabActivity(uri, active)
+	report, err := browser.ReportFromTabStatus(status, programstatus.HostApp)
+	if err != nil {
+		return err
+	}
+	return c.root.focusBrowser().SetTabStatus(uri, report)
 }

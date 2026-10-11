@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/llmapi"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"unstable.build/rune/cmd/rune-agent/dialogue/dialoguetui"
@@ -90,7 +91,7 @@ func (s syncComponent) beginTurn(start time.Time) {
 		st.TurnStart = start
 		st.Usage = llmapi.DialogueUsage{}
 	})
-	s.setTabActivity(true)
+	s.setTabStatus(browserapi.TabWorking)
 }
 
 // endTurn returns the bar to idle, keeping whatever the turn reported
@@ -101,21 +102,22 @@ func (s syncComponent) endTurn() {
 		st.Phase = ""
 		st.ActiveForm = ""
 	})
-	s.setTabActivity(false)
+	s.setTabStatus(browserapi.TabIdle)
 }
 
-// setTabActivity marks the chat's tab as having a turn in flight, so the
-// host can show it while the tab or its workspace is not focused. It is
-// best-effort: a failure loses the indicator, never the turn. It must be
-// called without mu held, because the host serves it under the UI lock
-// it also holds while drawing this chat.
-func (s syncComponent) setTabActivity(active bool) {
+// setTabStatus reports state as the status of the chat's tab, and
+// nothing when the chat has no tab. It is best-effort: a failure loses
+// the indicator, never the turn. It must be called without mu held:
+// the host serves it under the UI lock it also holds while drawing
+// this chat.
+func (s syncComponent) setTabStatus(state browserapi.TabState) {
 	if s.uri == (workspaceapi.URI{}) {
 		return
 	}
-	if err := s.h.wm.SetTabActivity(s.uri, active); err != nil {
-		slog.Debug("set chat tab activity",
-			"uri", s.uri.String(), "active", active, "error", err)
+	status := browserapi.TabStatus{State: state, Progress: -1}
+	if err := s.h.wm.SetTabStatus(s.uri, status); err != nil {
+		slog.Debug("set chat tab status",
+			"uri", s.uri.String(), "state", state, "error", err)
 	}
 }
 

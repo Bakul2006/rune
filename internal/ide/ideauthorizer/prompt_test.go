@@ -18,17 +18,22 @@ package ideauthorizer
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/extensionapi"
+	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/handler"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/browser"
 	"unstable.build/rune/internal/browser/browsertest"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 type fakePluginPromptOpener struct {
@@ -88,11 +93,11 @@ func TestPermissionPrompter(t *testing.T) {
 				option: tc.option,
 				close:  tc.close,
 			}
-			noti := &capturingNotifications{}
+			status := &capturingStatus{}
 			prompter := newPermissionPrompter(promptOpener, func(fn func()) bool {
 				fn()
 				return true
-			}, noti)
+			}, status)
 
 			decision, err := prompter.PromptPermission(context.Background(),
 				PermissionRequest{
@@ -106,13 +111,12 @@ func TestPermissionPrompter(t *testing.T) {
 			assert.Contains(t, promptOpener.message,
 				"Program /bin/test with args [--flag] wants to **manage the window manager**.")
 
-			// Creating the prompt also emits exactly one warning
-			// notification with the same permission context.
-			captured := noti.captured()
-			require.Len(t, captured, 1)
-			assert.Equal(t, browserapi.LevelWarn, captured[0].Level)
-			assert.Contains(t, captured[0].Msg, "authorization")
-			assert.Contains(t, captured[0].Msg, "/bin/test")
+			// The prompt is also reported as exactly one blocked status
+			// with the same permission context.
+			blocked := status.blocked()
+			require.Len(t, blocked, 1)
+			assert.Contains(t, blocked[0].Msg, "authorization")
+			assert.Contains(t, blocked[0].Msg, "/bin/test")
 		})
 	}
 }
@@ -121,11 +125,11 @@ func TestPermissionPrompterNotificationIncludesScopeLabel(t *testing.T) {
 	t.Parallel()
 
 	promptOpener := &fakePluginPromptOpener{option: PromptOptionYes}
-	noti := &capturingNotifications{}
+	status := &capturingStatus{}
 	prompter := newPermissionPrompter(promptOpener, func(fn func()) bool {
 		fn()
 		return true
-	}, noti)
+	}, status)
 
 	decision, err := prompter.PromptPermission(context.Background(), PermissionRequest{
 		Path:              "/usr/local/bin/plugin-cli",
@@ -138,12 +142,11 @@ func TestPermissionPrompterNotificationIncludesScopeLabel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PermissionAllowOnce, decision)
 
-	captured := noti.captured()
-	require.Len(t, captured, 1)
-	assert.Equal(t, browserapi.LevelWarn, captured[0].Level)
-	assert.Contains(t, captured[0].Msg, "/bin/grep")
-	assert.NotContains(t, captured[0].Msg, "∗")
-	assert.NotContains(t, captured[0].Msg, "/bin/grep *")
+	blocked := status.blocked()
+	require.Len(t, blocked, 1)
+	assert.Contains(t, blocked[0].Msg, "/bin/grep")
+	assert.NotContains(t, blocked[0].Msg, "∗")
+	assert.NotContains(t, blocked[0].Msg, "/bin/grep *")
 }
 
 func TestPluginPermissionPromptMessageWithLauncher(t *testing.T) {
@@ -459,23 +462,20 @@ func TestNewPermissionPrompterNilDependencies(t *testing.T) {
 	promptOpener := &fakePluginPromptOpener{option: PromptOptionYes}
 	schedule := func(fn func()) bool { return true }
 
-	assert.Nil(t, newPermissionPrompter(nil, schedule, nil))
-	assert.Nil(t, newPermissionPrompter(promptOpener, nil, nil))
-	// A nil notifications dependency is allowed; the prompter treats it
-	// as a no-op notifier so prompts still work.
-	assert.NotNil(t, newPermissionPrompter(promptOpener, schedule, nil))
-	assert.NotNil(t, newPermissionPrompter(promptOpener, schedule,
-		&capturingNotifications{}))
+	status := &capturingStatus{}
+	assert.Nil(t, newPermissionPrompter(nil, schedule, status))
+	assert.Nil(t, newPermissionPrompter(promptOpener, nil, status))
+	assert.NotNil(t, newPermissionPrompter(promptOpener, schedule, status))
 }
 
 func TestPermissionPrompterUnscheduledDeniesOnce(t *testing.T) {
 	t.Parallel()
 
 	promptOpener := &fakePluginPromptOpener{option: PromptOptionYes}
-	noti := &capturingNotifications{}
+	status := &capturingStatus{}
 	prompter := newPermissionPrompter(promptOpener, func(fn func()) bool {
 		return false
-	}, noti)
+	}, status)
 
 	decision, err := prompter.PromptPermission(context.Background(),
 		PermissionRequest{
@@ -485,8 +485,8 @@ func TestPermissionPrompterUnscheduledDeniesOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, PermissionDenyOnce, decision)
 	assert.Zero(t, promptOpener.calls)
-	// No prompt was opened, so no warning notification was emitted.
-	assert.Empty(t, noti.captured())
+	// No prompt was opened, so no status was reported.
+	assert.Empty(t, status.snapshot())
 }
 
 func TestPermissionPrompterContextCancellation(t *testing.T) {
@@ -497,7 +497,7 @@ func TestPermissionPrompterContextCancellation(t *testing.T) {
 	promptOpener := &fakePluginPromptOpener{option: "not selected"}
 	prompter := newPermissionPrompter(promptOpener, func(fn func()) bool {
 		return true
-	}, nil)
+	}, &capturingStatus{})
 
 	decision, err := prompter.PromptPermission(ctx, PermissionRequest{
 		Path:       "/bin/test",
@@ -515,3 +515,113 @@ func TestPluginPromptDecisionUnknownOptionDeniesOnce(t *testing.T) {
 }
 
 var _ browser.Window = browsertest.NopWindow()
+
+type capturingStatus struct {
+	mu      sync.Mutex
+	reports []capturedStatus
+}
+
+type capturedStatus struct {
+	uri    string
+	report programstatus.Report
+}
+
+func (c *capturingStatus) Tab(workspaceapi.URI, rune, string, browserapi.Handler) (browserapi.Handler, error) {
+	return nil, errors.New("unimplemented")
+}
+
+func (c *capturingStatus) SetTabName(workspaceapi.URI, string, term.Attributes) error {
+	return nil
+}
+
+func (c *capturingStatus) OnTabExit(workspaceapi.URI) bool { return false }
+
+func (c *capturingStatus) SetTabStatus(uri workspaceapi.URI, report programstatus.Report) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.reports = append(c.reports, capturedStatus{uri: uri.String(), report: report})
+	return nil
+}
+
+func (c *capturingStatus) EndTabStatus(workspaceapi.URI) error {
+	return errors.New("unimplemented")
+}
+
+func (c *capturingStatus) snapshot() []capturedStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.reports)
+}
+
+// blocked returns the blocked reports, one per prompt announced.
+func (c *capturingStatus) blocked() []programstatus.Report {
+	var ret []programstatus.Report
+	for _, r := range c.snapshot() {
+		if r.report.State == programstatus.Blocked {
+			ret = append(ret, r.report)
+		}
+	}
+	return ret
+}
+
+func TestPermissionPrompterReportsStatus(t *testing.T) {
+	t.Parallel()
+
+	promptOpener := &fakePluginPromptOpener{option: PromptOptionYes}
+	status := &capturingStatus{}
+	prompter := newPermissionPrompter(promptOpener, func(fn func()) bool {
+		fn()
+		return true
+	}, status)
+	req := PermissionRequest{
+		Path:        "/usr/local/bin/plugin-cli",
+		Permission:  extensionapi.PermissionExecute,
+		CommandPath: "/usr/bin/make",
+		CommandArgs: []string{"test"},
+	}
+
+	decision, err := prompter.PromptPermission(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, PermissionAllowOnce, decision)
+
+	reports := status.snapshot()
+	require.Len(t, reports, 2)
+	assert.Equal(t, "ideauthorizer:///prompt/1", reports[0].uri)
+	assert.Equal(t, programstatus.Report{
+		State: programstatus.Blocked, Kind: programstatus.KindPermission, Progress: -1,
+		App: programstatus.HostApp, Title: "Authorization",
+		Msg: "User authorization required for /usr/bin/make",
+	}, reports[0].report)
+	assert.Equal(t, reports[0].uri, reports[1].uri, "the prompt is withdrawn under its own uri")
+	assert.Equal(t, programstatus.Report{State: programstatus.Clear}, reports[1].report)
+
+	_, err = prompter.PromptPermission(context.Background(), req)
+	require.NoError(t, err)
+	reports = status.snapshot()
+	require.Len(t, reports, 4)
+	assert.Equal(t, "ideauthorizer:///prompt/2", reports[2].uri, "every prompt has its own uri")
+
+	t.Run("a cancelled prompt is withdrawn", func(t *testing.T) {
+		ticks := make(chan func(), 2)
+		status := &capturingStatus{}
+		prompter := newPermissionPrompter(promptOpener, func(fn func()) bool {
+			ticks <- fn
+			return true
+		}, status)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, err := prompter.PromptPermission(ctx, req)
+			assert.ErrorIs(t, err, context.Canceled)
+		}()
+		cancel()
+		<-done
+		(<-ticks)()
+		(<-ticks)()
+		reports := status.snapshot()
+		require.Len(t, reports, 2)
+		assert.Equal(t, programstatus.Blocked, reports[0].report.State)
+		assert.Equal(t, programstatus.Report{State: programstatus.Clear}, reports[1].report)
+	})
+}

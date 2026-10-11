@@ -68,7 +68,7 @@ func (m *reviewWindowManager) CloseWindow(browserapi.Window) error {
 	return nil
 }
 
-func (m *reviewWindowManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *reviewWindowManager) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 // countingEditor wraps a real editor so tests can count handler closes
 // and simulate an editor that refuses to open.

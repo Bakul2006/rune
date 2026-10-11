@@ -22,10 +22,12 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/unstablebuild/blue/logging"
 	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
+	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/component"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"github.com/unstablebuild/rune-go-sdk/tui"
 	"unstable.build/rune/internal/handler"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // DefaultConfig returns the default Config.
@@ -48,7 +50,93 @@ func DefaultConfig() Config {
 			MinWidth:       60,
 		},
 		Notifications: logNotifications{},
+		TabStatus:     DefaultTabStatusConfig(),
 	}
+}
+
+// DefaultTabStatusConfig returns the default TabStatusConfig. Its icons
+// are Nerd Font glyphs.
+func DefaultTabStatusConfig() TabStatusConfig {
+	return TabStatusConfig{
+		Spinner:    []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+		SpinnerFPS: 10,
+		BlockedIcons: map[programstatus.Kind]rune{
+			programstatus.KindNone:       '󰹇',
+			programstatus.KindPermission: '󰹇',
+			programstatus.KindQuestion:   '󰋗',
+			programstatus.KindAuth:       '󰗒',
+		},
+		DoneIcon:        '󰗠',
+		ErrorIcon:       '󰅙',
+		IdleIconAttr:    term.Attributes{Fg: term.ColorYellow},
+		WorkingIconAttr: term.Attributes{Fg: term.ColorYellow},
+		WorkingDoneAttr: term.Attributes{Fg: term.ColorGreen},
+		BlockedAttr:     term.Attributes{Fg: term.ColorYellow},
+		BlockedIconAttr: term.Attributes{Fg: term.ColorRed},
+		DoneAttr:        term.Attributes{Fg: term.ColorGreen},
+		DoneIconAttr:    term.Attributes{Fg: term.ColorSilver},
+		ErrorAttr:       term.Attributes{Fg: term.ColorRed},
+		ErrorIconAttr:   term.Attributes{Fg: term.ColorYellow},
+	}
+}
+
+// TabStatusConfig styles the decorations a Component draws on a tab to
+// reflect the status its program reported via Component.SetTabStatus.
+// Every attribute is layered over the tab's usual one, so colors left
+// at term.ColorDefault keep the configured ones.
+type TabStatusConfig struct {
+	// Spinner holds the frames cycled, at SpinnerFPS frames per second,
+	// as the icon of working tabs. Empty leaves the icon alone; a zero
+	// SpinnerFPS falls back to 10.
+	Spinner    []rune
+	SpinnerFPS int
+	// BlockedIcons maps the kind of a blocked status to the icon shown
+	// for it. programstatus.KindNone is the fallback for kinds without
+	// an entry; a missing fallback leaves the icon alone.
+	BlockedIcons map[programstatus.Kind]rune
+	// DoneIcon and ErrorIcon replace the icon of done and error tabs.
+	// Zero leaves the icon alone.
+	DoneIcon  rune
+	ErrorIcon rune
+
+	// IdleIconAttr styles the icon of a tab whose program reported
+	// idle, i.e. that it waits on the user; a tab that reported
+	// nothing is left alone.
+	IdleIconAttr term.Attributes
+	// WorkingIconAttr styles the spinner. WorkingDoneAttr paints the
+	// completed prefix of the name of a working tab that reported
+	// progress.
+	WorkingIconAttr term.Attributes
+	WorkingDoneAttr term.Attributes
+	// BlockedAttr, DoneAttr and ErrorAttr style the name of a tab in the
+	// respective state, and their *IconAttr counterparts its icon.
+	BlockedAttr     term.Attributes
+	BlockedIconAttr term.Attributes
+	DoneAttr        term.Attributes
+	DoneIconAttr    term.Attributes
+	ErrorAttr       term.Attributes
+	ErrorIconAttr   term.Attributes
+}
+
+// BarAttrs returns the name and icon attributes that reflect status:
+// the pair configured for its state, only the icon one for working
+// and for a reported idle, and zero when nothing was reported.
+func (c TabStatusConfig) BarAttrs(status programstatus.Summary) (name, icon term.Attributes) {
+	switch status.State {
+	case programstatus.Idle:
+		if len(status.Records) > 0 {
+			return term.Attributes{}, c.IdleIconAttr
+		}
+	case programstatus.Working:
+		return term.Attributes{}, c.WorkingIconAttr
+	case programstatus.Blocked:
+		return c.BlockedAttr, c.BlockedIconAttr
+	case programstatus.Done:
+		return c.DoneAttr, c.DoneIconAttr
+	case programstatus.Error:
+		return c.ErrorAttr, c.ErrorIconAttr
+	}
+	return term.Attributes{}, term.Attributes{}
 }
 
 // PromptConfig holds configuration for the browser's Prompt component.
@@ -102,15 +190,18 @@ type Config struct {
 	OnTabIconClick func(*Tab)
 
 	// ActiveTabShader names the continuous effect run over the labels of
-	// tabs marked active via Component.SetTabActivity. Empty disables
-	// it. ActiveTabShaderFPS and ActiveTabShaderLoop tune the effect and
-	// fall back to the catalog defaults when zero.
+	// tabs whose program reported working via Component.SetTabStatus.
+	// Empty disables it. ActiveTabShaderFPS and ActiveTabShaderLoop tune
+	// the effect and fall back to the catalog defaults when zero.
 	ActiveTabShader     string
 	ActiveTabShaderFPS  int
 	ActiveTabShaderLoop time.Duration
-	// OnTabActivity is called whenever a tab's activity changes,
-	// including when an active tab is removed.
-	OnTabActivity func()
+	// OnTabStatus is called whenever a tab's status changes, with the
+	// status it had before and the one it has now. A tab removed with a
+	// status reports a change to idle.
+	OnTabStatus func(uri workspaceapi.URI, prev, status programstatus.Summary)
+	// TabStatus styles the decorations that reflect a tab's status.
+	TabStatus TabStatusConfig
 
 	// RightInset reserves a column of this width in cells to the right
 	// of the window manager, leaving room for another UI element to

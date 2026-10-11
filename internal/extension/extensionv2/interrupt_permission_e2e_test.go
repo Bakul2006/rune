@@ -94,7 +94,7 @@ func TestExtensionInterruptPermissionE2E(t *testing.T) {
 	authorizer, err := ideauthorizer.NewAuthorizer(
 		texttest.NopEditor(), prompt, storage,
 		func(fn func()) bool { fn(); return true },
-		nil, pkgtrust.NewStore(t.TempDir(), nil), ideauthorizer.Config{},
+		e2eBrowser{}, pkgtrust.NewStore(t.TempDir(), nil), ideauthorizer.Config{},
 	)
 	require.NoError(t, err)
 
@@ -315,7 +315,7 @@ func TestExtensionInterruptPermissionConcurrentE2E(t *testing.T) {
 	prompt := newDedupingPromptOpener(ideauthorizer.PromptOptionYes)
 	storage := storagestub.NewInMemoryService()
 	authorizer, err := ideauthorizer.NewAuthorizer(
-		texttest.NopEditor(), prompt, storage, scheduleNextTick, nil,
+		texttest.NopEditor(), prompt, storage, scheduleNextTick, e2eBrowser{},
 		pkgtrust.NewStore(t.TempDir(), nil), ideauthorizer.Config{},
 	)
 	require.NoError(t, err)

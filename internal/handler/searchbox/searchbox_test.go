@@ -64,7 +64,7 @@ func (m *testWindowManager) CloseWindow(browserapi.Window) error {
 	return m.closeErr
 }
 
-func (m *testWindowManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *testWindowManager) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 // findController records the calls a find-only host would receive.
 type findController struct {

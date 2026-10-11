@@ -109,7 +109,7 @@ func (s *ShadedTabs) activeRects() []shader.Rect {
 	active := s.config.Active()
 	rects := make([]shader.Rect, 0, len(active))
 	for _, idx := range active {
-		offset, width, ok := s.TabRect(idx)
+		offset, width, ok := s.TabShadeRect(idx)
 		if !ok {
 			continue
 		}

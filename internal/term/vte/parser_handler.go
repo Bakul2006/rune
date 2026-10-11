@@ -37,6 +37,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/clipboard"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/browser"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte/vtegraphics"
 	"unstable.build/rune/internal/term/vte/vteparser"
 	"unstable.build/rune/internal/term/vte/vtescreen"
@@ -104,6 +105,12 @@ type parserHandler struct {
 	// keyboard outlives ResetState, which only resets it, because the
 	// Component hands it to the input path.
 	keyboard *keyboardState
+
+	// statusReported is whether the program reported a status that was
+	// not cleared since, so that a terminal whose program never reports
+	// does not tell the tab manager about every prompt. It outlives
+	// ResetState, which clears what was reported.
+	statusReported bool
 
 	// clusterBuf is reused scratch for the mergeContinuation probe.
 	clusterBuf []byte
@@ -1020,6 +1027,7 @@ func (t *parserHandler) ResetState() {
 	fs := t.fs
 	tempDir := t.tempDir
 	keyboard := t.keyboard
+	statusReported := t.statusReported
 	historyScrolled := t.historyScrolled
 	*t = parserHandler{}
 	t.init(mu, pty, tm, clipboard, bell, uri,
@@ -1027,6 +1035,7 @@ func (t *parserHandler) ResetState() {
 		cellPixelSize, fs, tempDir)
 	t.keyboard = keyboard
 	t.keyboard.reset()
+	t.statusReported = statusReported
 	t.historyScrolled = historyScrolled
 
 	// resize
@@ -1035,6 +1044,7 @@ func (t *parserHandler) ResetState() {
 	t.width = width
 	t.height = height
 	t.tabs.resize(width)
+	t.withdrawStatus()
 }
 
 // Reverse Index.
@@ -2186,4 +2196,59 @@ func (t *parserHandler) readGraphicsMedium(
 		_ = t.fs.Remove(p)
 	}
 	return data, nil
+}
+
+// ProgramStatus satisfies vteparser.Handler.
+func (t *parserHandler) ProgramStatus(report programstatus.Report) {
+	t.sync.mu.Lock()
+	defer t.sync.mu.Unlock()
+	t.statusReported = report.State != programstatus.Clear || report.ID != ""
+	t.reportStatus(report)
+}
+
+// ProgramStatusQuery satisfies vteparser.Handler. The reply is the
+// fixed query body: nothing a program reported is ever written back.
+func (t *parserHandler) ProgramStatusQuery(terminator string) {
+	if _, err := t.pty.Master.Write([]byte("\x1b]7501;?" + terminator)); err != nil {
+		t.log(log.WarnLevel, "write program status reply to pty: %v", err)
+	}
+}
+
+// PromptStart satisfies vteparser.Handler. A new prompt means the
+// program that reported working or blocked is gone.
+func (t *parserHandler) PromptStart() {
+	t.sync.mu.Lock()
+	defer t.sync.mu.Unlock()
+	t.endStatus()
+}
+
+// endStatus tells the tab manager that the program that reported a
+// status ended. It must be called with t.sync.mu held.
+func (t *parserHandler) endStatus() {
+	if !t.statusReported {
+		return
+	}
+	// doesn't necessarily need to be a tab vte
+	if err := t.tm.EndTabStatus(t.uri); err != nil {
+		t.log(log.TraceLevel, "end tab status uri=%q: %v", t.uri, err)
+	}
+}
+
+// withdrawStatus clears every status the program reported. It must be
+// called with t.sync.mu held.
+func (t *parserHandler) withdrawStatus() {
+	if !t.statusReported {
+		return
+	}
+	t.statusReported = false
+	t.reportStatus(programstatus.Report{State: programstatus.Clear})
+}
+
+// reportStatus forwards report to the tab manager. It must be called
+// with t.sync.mu held.
+func (t *parserHandler) reportStatus(report programstatus.Report) {
+	// doesn't necessarily need to be a tab vte
+	if err := t.tm.SetTabStatus(t.uri, report); err != nil {
+		t.log(log.TraceLevel, "set tab status uri=%q: %v", t.uri, err)
+	}
 }

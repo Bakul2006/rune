@@ -39,6 +39,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/tui"
 	"unstable.build/rune/internal/browser"
 	"unstable.build/rune/internal/ide/idedebug"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/text/texttest"
 )
 
@@ -637,9 +638,10 @@ func (b *fakeBrowser) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (b *fakeBrowser) SetTabActivity(workspaceapi.URI, bool) error { return nil }
-func (b *fakeBrowser) PublishEvent(term.Event) error               { return nil }
-func (b *fakeBrowser) Close() error                                { return nil }
+func (b *fakeBrowser) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (b *fakeBrowser) EndTabStatus(workspaceapi.URI) error                       { return nil }
+func (b *fakeBrowser) PublishEvent(term.Event) error                             { return nil }
+func (b *fakeBrowser) Close() error                                              { return nil }
 
 func (b *fakeBrowser) DragHover(term.Coordinates) bool          { return false }
 func (b *fakeBrowser) DragCancel()                              {}

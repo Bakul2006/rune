@@ -35,7 +35,13 @@ import (
 	"google.golang.org/grpc"
 	"unstable.build/rune/internal/browser"
 	"unstable.build/rune/internal/browser/browsertest"
+	"unstable.build/rune/internal/term/programstatus"
+	"unstable.build/rune/internal/workspace/processctx"
 )
+
+// integrationExtensionID tags every call as extensionv2's interceptor
+// does for an authenticated extension.
+const integrationExtensionID = "test-extension"
 
 func newClientServerIntegration(
 	t *testing.T, h browser.Browser,
@@ -44,7 +50,11 @@ func newClientServerIntegration(
 	require.NoError(t, err)
 	mutex := new(sync.Mutex)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(func(
+		ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
+	) (any, error) {
+		return handler(processctx.ContextWithExtensionID(ctx, integrationExtensionID), req)
+	}))
 	rpcServer := NewServer(h, mutex)
 	rpcServer.SetSyncMode()
 	browserrpc.RegisterWindowManagerServer(grpcServer, rpcServer)
@@ -198,7 +208,7 @@ func TestClientServerIntegrationTab(t *testing.T) {
 	require.NoError(t, client.SetWindowContent(win, tab))
 }
 
-func TestClientServerIntegrationSetTabActivity(t *testing.T) {
+func TestClientServerIntegrationSetTabStatus(t *testing.T) {
 	defer goleak.VerifyNone(t)
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -210,12 +220,31 @@ func TestClientServerIntegrationSetTabActivity(t *testing.T) {
 	uri, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
 	require.NoError(t, err)
 
+	blocked := browserapi.TabStatus{
+		ID: "tool/bash", State: browserapi.TabBlocked, Kind: browserapi.TabKindPermission,
+		Progress: 40, Title: "make test", Message: "Approve apply?",
+	}
+	wantBlocked := programstatus.Report{
+		ID: "tool/bash", State: programstatus.Blocked, Kind: programstatus.KindPermission,
+		Progress: 40, App: integrationExtensionID, Title: "make test", Msg: "Approve apply?",
+	}
+	clear := browserapi.TabStatus{State: browserapi.TabClear, Progress: -1}
 	gomock.InOrder(
-		mock.EXPECT().SetTabActivity(uri, true).Return(nil),
-		mock.EXPECT().SetTabActivity(uri, false).Return(errors.New("unknown tab")),
+		mock.EXPECT().SetTabStatus(uri, wantBlocked).Return(nil),
+		mock.EXPECT().SetTabStatus(uri, programstatus.Report{
+			State: programstatus.Clear, Progress: -1,
+		}).Return(errors.New("unknown tab")),
 	)
-	require.NoError(t, client.SetTabActivity(uri, true))
-	err = client.SetTabActivity(uri, false)
+	require.NoError(t, client.SetTabStatus(uri, blocked))
+	err = client.SetTabStatus(uri, clear)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown tab")
+
+	err = client.SetTabStatus(uri, browserapi.TabStatus{State: 99})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown tab state")
+
+	err = client.SetTabStatus(uri, browserapi.TabStatus{State: browserapi.TabWorking, ID: "a//b"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid id")
 }

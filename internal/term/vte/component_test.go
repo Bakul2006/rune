@@ -34,6 +34,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/debug"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte/vteparser"
 	"unstable.build/rune/internal/workspace/workspacetest"
 )
@@ -1302,6 +1303,27 @@ type closablePtyExecutor struct {
 
 func (e *closablePtyExecutor) NewPty(context.Context) (workspaceapi.Pty, error) {
 	return workspaceapi.Pty{Master: &e.master, Slave: &workspacetest.File{}}, nil
+}
+
+func TestComponentCloseWithdrawsProgramStatus(t *testing.T) {
+	t.Parallel()
+
+	tm := &mockTabManager{}
+	exe := &closablePtyExecutor{}
+	comp, err := NewComponent(exe, exe, tm, DefaultConfig())
+	require.NoError(t, err)
+	comp.parserHandler.ProgramStatus(programstatus.Report{
+		State: programstatus.Done, Progress: -1, Msg: "ok",
+	})
+	require.Len(t, tm.statuses, 1)
+
+	require.NoError(t, comp.Close())
+	require.Len(t, tm.statuses, 2, "closing withdraws what the terminal reported")
+	assert.Equal(t, statusCall{report: programstatus.Report{State: programstatus.Clear}}, tm.statuses[1])
+	assert.Equal(t, comp.uri, tm.toUri)
+
+	require.NoError(t, comp.Close())
+	assert.Len(t, tm.statuses, 2, "nothing left to withdraw")
 }
 
 func TestComponentOnFocusChangeAfterClose(t *testing.T) {

@@ -25,6 +25,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ernestrc/go-multierror"
@@ -42,6 +43,7 @@ import (
 	"unstable.build/rune/internal/component/shader"
 	"unstable.build/rune/internal/debug"
 	thandler "unstable.build/rune/internal/handler"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 var _ browserapi.Handler = (*Component)(nil)
@@ -95,6 +97,7 @@ type Component struct {
 
 	dirtyTabs   bool
 	focusWindow thandler.Window
+	inFocus     bool
 	config      Config
 	buffers     []*Tab
 	windows     map[uint64]*browserWindow
@@ -102,6 +105,9 @@ type Component struct {
 	drag        dragState
 	winDrop     winDropState
 	interrupter term.Interrupter
+	// spinner ticks while at least one tab is working so Draw can cycle
+	// the working tabs' icons.
+	spinner *statusSpinner
 
 	// rightInset is the live width of the reserved right column. It
 	// starts at Config.RightInset and SetRightInset changes it.
@@ -131,6 +137,7 @@ func (c *Component) Init(config Config) {
 	c.config = config
 	c.config.WindowManagerConfig.FloatingBar = c
 	c.windows = make(map[uint64]*browserWindow)
+	c.inFocus = true
 
 	c.nextSplit = browserapi.OrientationRight
 	c.prompts = make(map[string]Window)
@@ -342,12 +349,11 @@ func (c *Component) TabIcon(uri workspaceapi.URI) (icon, defaultIcon rune, ok bo
 // TabAttrs returns the attributes of the tab with the given uri or false
 // if there's no tab with the given uri.
 func (c *Component) TabAttrs(uri workspaceapi.URI) (term.Attributes, bool) {
-	for i, t := range c.buffers {
-		if t.uri.String() == uri.String() {
-			return c.tabs.TabAttr(i), true
-		}
+	t, ok := c.Tab(uri)
+	if !ok {
+		return term.Attributes{}, false
 	}
-	return term.Attributes{}, false
+	return t.attr, true
 }
 
 // SetTabNameAndAttrs overrides the name and attributes of the tab with the given uri.
@@ -358,7 +364,8 @@ func (c *Component) SetTabNameAndAttrs(
 	for i, t := range c.buffers {
 		if t.uri.String() == uri.String() {
 			c.tabs.SetTabName(i, name)
-			c.tabs.SetTabAttr(i, attr)
+			t.attr = attr
+			c.applyTabAttr(i, t)
 			return true
 		}
 	}
@@ -372,50 +379,283 @@ func (c *Component) SetTabAttrs(
 ) bool {
 	for i, t := range c.buffers {
 		if t.uri.String() == uri.String() {
-			c.tabs.SetTabAttr(i, attr)
+			t.attr = attr
+			c.applyTabAttr(i, t)
 			return true
 		}
 	}
 	return false
 }
 
-// SetTabActivity marks the tab with the given uri as having work in
-// progress or as idle. The active-tab shader runs over the labels of
-// active tabs for as long as there is at least one. Activity is dropped
-// when the tab is removed. It returns false if there's no tab with the
-// given uri; setting the current state again is a no-op.
-func (c *Component) SetTabActivity(uri workspaceapi.URI, active bool) bool {
+// SetTabStatus applies report, made by the program behind the tab with
+// the given uri, to the tab's status, as browser.TabManager describes.
+// The tab is decorated after the status until it goes back to idle,
+// and every change is reported through Config.OnTabStatus. Done and
+// error records reported on the tab in sight are acknowledged right
+// after they are reported, as the user already sees them. It returns
+// false if there's no tab with the given uri.
+func (c *Component) SetTabStatus(uri workspaceapi.URI, report programstatus.Report) bool {
 	t, ok := c.Tab(uri)
 	if !ok {
 		return false
 	}
-	if t.active != active {
-		t.active = active
-		c.tabActivityChanged()
+	t.records.Apply(report)
+	c.refreshTabStatus(t)
+	if seen, ok := c.tabInSight(); ok && seen == t {
+		t.AckStatus()
 	}
 	return true
 }
 
-// HasActiveTabs reports whether any tab is marked active.
-func (c *Component) HasActiveTabs() bool {
-	return slices.ContainsFunc(c.buffers, func(t *Tab) bool { return t.active })
+// OnFocusChange tells whether the user's focus is on this Component,
+// which it cannot tell on its own when the host terminal or the
+// workspace it belongs to loses or regains it. A Component starts in
+// focus. Out of focus no tab is in sight, so done and error records
+// stay until focus comes back and acknowledges those of the tab in the
+// focus window.
+func (c *Component) OnFocusChange(inFocus bool) {
+	c.inFocus = inFocus
+	if t, ok := c.tabInSight(); ok {
+		t.AckStatus()
+	}
+}
+
+// tabInSight returns the tab the user sees: the one in the focus window
+// while the Component is in focus.
+func (c *Component) tabInSight() (*Tab, bool) {
+	if !c.inFocus || c.focusWindow == (thandler.Window{}) {
+		return nil, false
+	}
+	t, ok := c.focusWindow.Content().(*Tab)
+	return t, ok
+}
+
+// EndTabStatus drops what the program behind the tab with the given
+// uri reported working, blocked or idle, as browser.TabManager
+// describes. It returns false if there's no tab with the given uri.
+func (c *Component) EndTabStatus(uri workspaceapi.URI) bool {
+	t, ok := c.Tab(uri)
+	if !ok {
+		return false
+	}
+	if t.records.DropTransient() {
+		c.refreshTabStatus(t)
+	}
+	return true
+}
+
+// refreshTabStatus rolls the records of t up into its status and
+// decorates the tab after it when it changed. A removed tab is left
+// alone.
+func (c *Component) refreshTabStatus(t *Tab) {
+	idx, ok := c.findTabID(t)
+	if !ok {
+		return
+	}
+	status := t.records.Summary()
+	if t.status.Equal(status) {
+		return
+	}
+	prev := t.status
+	t.status = status
+	c.applyTabDecorations(idx, t)
+	c.tabStatusChanged(t.uri, prev, status)
+}
+
+// TabStatus returns the status last set on the tab with the given uri,
+// an empty idle one if none was, and false if there's no such tab.
+func (c *Component) TabStatus(uri workspaceapi.URI) (programstatus.Summary, bool) {
+	t, ok := c.Tab(uri)
+	if !ok {
+		return programstatus.Summary{}, false
+	}
+	return t.status, true
+}
+
+// HasWorkingTabs reports whether any tab's program reported working.
+func (c *Component) HasWorkingTabs() bool {
+	return slices.ContainsFunc(c.buffers, (*Tab).working)
+}
+
+// StatusRollup returns the most pressing status among the tabs
+// (blocked > error > done > working > reported idle) and the uri of
+// the tab it was reported on. When no tab reported anything it returns
+// an empty idle status and a zero uri.
+func (c *Component) StatusRollup() (programstatus.Summary, workspaceapi.URI) {
+	var top *Tab
+	for _, t := range c.buffers {
+		if top == nil || t.status.Outranks(top.status) {
+			top = t
+		}
+	}
+	if top == nil || (top.status.State == programstatus.Idle && len(top.status.Records) == 0) {
+		return programstatus.Summary{Progress: -1}, workspaceapi.URI{}
+	}
+	return top.status, top.uri
 }
 
 func (c *Component) activeTabIndices() []int {
 	var ret []int
 	for i, t := range c.buffers {
-		if t.active {
+		if t.working() {
 			ret = append(ret, i)
 		}
 	}
 	return ret
 }
 
-func (c *Component) tabActivityChanged() {
-	c.shadedTabs.SetRunning(c.HasActiveTabs())
-	if c.config.OnTabActivity != nil {
-		c.config.OnTabActivity()
+func (c *Component) tabStatusChanged(
+	uri workspaceapi.URI, prev, status programstatus.Summary,
+) {
+	working := c.HasWorkingTabs()
+	c.shadedTabs.SetRunning(working)
+	c.setSpinnerRunning(working)
+	if c.config.OnTabStatus != nil {
+		c.config.OnTabStatus(uri, prev, status)
 	}
+}
+
+// applyTabAttr pushes the tab's name attribute, with the status
+// attribute layered over it, to the tab bar.
+func (c *Component) applyTabAttr(idx int, t *Tab) {
+	attr := t.attr
+	if status := c.statusNameAttr(t.status); status != (term.Attributes{}) {
+		attr = term.AttributesUnion(attr, status)
+	}
+	c.tabs.SetTabAttr(idx, attr)
+}
+
+// applyTabDecorations redraws the icon, progress and name attribute of
+// the tab from its status. A status without an icon restores the underlying
+// tab icon. The icon attribute is resolved on the next Draw, as it depends
+// on which window has the focus.
+func (c *Component) applyTabDecorations(idx int, t *Tab) {
+	c.applyTabAttr(idx, t)
+	cfg := c.config.TabStatus
+	var icon rune
+	switch t.status.State {
+	case programstatus.Working:
+		if t.status.Progress >= 0 {
+			c.tabs.SetTabProgress(idx, t.status.Progress, cfg.WorkingDoneAttr)
+		} else {
+			c.tabs.ResetTabProgress(idx)
+		}
+		icon = c.spinnerFrame()
+	case programstatus.Blocked:
+		c.tabs.ResetTabProgress(idx)
+		icon = cfg.BlockedIcons[t.status.Kind]
+		if icon == 0 {
+			icon = cfg.BlockedIcons[programstatus.KindNone]
+		}
+	case programstatus.Done:
+		c.tabs.ResetTabProgress(idx)
+		icon = cfg.DoneIcon
+	case programstatus.Error:
+		c.tabs.ResetTabProgress(idx)
+		icon = cfg.ErrorIcon
+	default:
+		c.tabs.ResetTabProgress(idx)
+	}
+	if icon != 0 {
+		c.tabs.SetTabIcon(idx, icon)
+	} else {
+		c.tabs.ResetTabIcon(idx)
+	}
+	c.dirtyTabs = true
+}
+
+func (c *Component) statusNameAttr(status programstatus.Summary) term.Attributes {
+	name, _ := c.config.TabStatus.BarAttrs(status)
+	return name
+}
+
+func (c *Component) statusIconAttr(status programstatus.Summary) term.Attributes {
+	_, icon := c.config.TabStatus.BarAttrs(status)
+	return icon
+}
+
+// tabIconAttr layers the caller's and the status icon attributes over
+// the focus-dependent base.
+func (c *Component) tabIconAttr(base term.Attributes, t *Tab) term.Attributes {
+	attr := term.AttributesUnion(base, t.iconAttr)
+	if status := c.statusIconAttr(t.status); status != (term.Attributes{}) {
+		attr = term.AttributesUnion(attr, status)
+	}
+	return attr
+}
+
+// spinnerFrame returns the current spinner frame, or zero without
+// frames to cycle.
+func (c *Component) spinnerFrame() rune {
+	frames := c.config.TabStatus.Spinner
+	if len(frames) == 0 {
+		return 0
+	}
+	var epoch int64
+	if c.spinner != nil {
+		epoch = c.spinner.epoch.Load()
+	}
+	return frames[int(epoch%int64(len(frames)))]
+}
+
+// setSpinnerRunning starts or stops the ticker that cycles the icons of
+// working tabs. Starting is a no-op without frames or an interrupter.
+func (c *Component) setSpinnerRunning(running bool) {
+	if running == (c.spinner != nil) {
+		return
+	}
+	if !running {
+		c.spinner.cancel()
+		c.spinner = nil
+		return
+	}
+	if c.interrupter == nil || len(c.config.TabStatus.Spinner) == 0 {
+		return
+	}
+	fps := c.config.TabStatus.SpinnerFPS
+	if fps <= 0 {
+		fps = DefaultTabStatusConfig().SpinnerFPS
+	}
+	c.spinner = newStatusSpinner(c.interrupter, fps)
+}
+
+// drawSpinner moves the icons of working tabs to the current frame.
+func (c *Component) drawSpinner() {
+	if c.spinner == nil {
+		return
+	}
+	frame := c.spinnerFrame()
+	for i, t := range c.buffers {
+		if t.working() && c.tabs.TabIcon(i) != frame {
+			c.tabs.SetTabIcon(i, frame)
+		}
+	}
+}
+
+// statusSpinner wakes the host at a fixed cadence and counts the frames
+// it asked for.
+type statusSpinner struct {
+	epoch  atomic.Int64
+	cancel context.CancelFunc
+}
+
+func newStatusSpinner(interrupter term.Interrupter, fps int) *statusSpinner {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &statusSpinner{cancel: cancel}
+	go debug.CapturePanicReport(func() {
+		ticker := time.NewTicker(time.Second / time.Duration(fps))
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.epoch.Add(1)
+				_ = interrupter.Interrupt(ctx)
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
+	return s
 }
 
 // SetTabIcon overrides the icon of the tab with the given uri.
@@ -466,7 +706,8 @@ func (c *Component) ResetTabNameAndAttrs(uri workspaceapi.URI) bool {
 	for i, t := range c.buffers {
 		if t.uri.String() == uri.String() {
 			c.tabs.ResetTabName(i)
-			c.tabs.ResetTabAttr(i)
+			t.attr = c.tabs.TabDefaultAttr(i)
+			c.applyTabAttr(i, t)
 			return true
 		}
 	}
@@ -858,10 +1099,11 @@ func (c *Component) Resize(width, height int) {
 
 // Draw satisfies tui.Component
 func (c *Component) Draw(w term.Writer) {
+	c.drawSpinner()
 	if c.dirtyTabs {
 		c.tabs.ResetFocus()
 		for id, t := range c.buffers {
-			c.tabs.SetIconAttr(id, term.AttributesUnion(c.nonFocusTabIconAttr(), t.iconAttr))
+			c.tabs.SetIconAttr(id, c.tabIconAttr(c.nonFocusTabIconAttr(), t))
 			if !t.free {
 				c.tabs.SetFocus(id)
 			}
@@ -878,7 +1120,7 @@ func (c *Component) Draw(w term.Writer) {
 				if ok {
 					// reset tab override attributes
 					id := c.mustFindTabID(t)
-					c.tabs.SetIconAttr(id, term.AttributesUnion(c.focusTabIconAttr(), t.iconAttr))
+					c.tabs.SetIconAttr(id, c.tabIconAttr(c.focusTabIconAttr(), t))
 					c.tabs.SetFocus(id)
 				}
 			}
@@ -1327,6 +1569,7 @@ func (c *Component) Close() (ret error) {
 	clear(c.buffers)
 	c.buffers = c.buffers[:0]
 	c.shadedTabs.SetRunning(false)
+	c.setSpinnerRunning(false)
 	c.wm.UnsubscribeAll()
 
 	c.wm.Iterate(func(w thandler.Window) {
@@ -1384,9 +1627,10 @@ func (c *Component) removeTab(t *Tab) bool {
 	if !ok {
 		panic(fmt.Sprintf("corrupted tabs: could not find tab with id %v", id))
 	}
-	if t.active {
-		t.active = false
-		c.tabActivityChanged()
+	if len(t.status.Records) > 0 {
+		prev := t.status
+		t.status = programstatus.Summary{Progress: -1}
+		c.tabStatusChanged(t.uri, prev, t.status)
 	}
 	return true
 }
@@ -1936,14 +2180,17 @@ func (c *browserScrollableContent) MaxSeekOffset() int {
 	return c.Handler.(component.Scrollable).MaxSeekOffset()
 }
 
-// satisfies handler.WindowSubscriber to
-// override union attrs of focus window
+// satisfies handler.WindowSubscriber to override union attrs of the
+// focus window and to acknowledge the status of the tab it shows.
 type wmSubscriber Component
 
 func (s *wmSubscriber) OnFocus(prev, focus thandler.Window) {
 	c := (*Component)(s)
 	c.focusWindow = focus
 	c.dirtyTabs = true
+	if t, ok := c.tabInSight(); ok {
+		t.AckStatus()
+	}
 }
 
 // OnBarClose routes window-bar close icon clicks through closeWindow so
@@ -2155,7 +2402,9 @@ func (c *Component) winDropVeil() (win *browserWindow, label string, ok bool) {
 func (c *Component) SetInterrupter(i term.Interrupter) {
 	c.interrupter = i
 	c.shadedTabs.SetInterrupter(i)
-	c.shadedTabs.SetRunning(c.HasActiveTabs())
+	working := c.HasWorkingTabs()
+	c.shadedTabs.SetRunning(working)
+	c.setSpinnerRunning(working)
 }
 
 // WindowAt returns the window rendered at pos, which is relative to

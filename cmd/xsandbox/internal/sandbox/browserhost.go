@@ -34,6 +34,7 @@ import (
 	"unstable.build/rune/internal/browser/browsertest"
 	"unstable.build/rune/internal/extension"
 	"unstable.build/rune/internal/rpc"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // browserHost is the sandbox's real headless browser backend. It wraps
@@ -148,9 +149,16 @@ func (h *browserHost) OnTabExit(uri workspaceapi.URI) bool {
 	return h.comp.OnTabExit(uri)
 }
 
-func (h *browserHost) SetTabActivity(uri workspaceapi.URI, active bool) error {
-	if !h.comp.SetTabActivity(uri, active) {
-		return errors.New("set tab activity called on unknown tab")
+func (h *browserHost) SetTabStatus(uri workspaceapi.URI, report programstatus.Report) error {
+	if !h.comp.SetTabStatus(uri, report) {
+		return errors.New("set tab status called on unknown tab")
+	}
+	return nil
+}
+
+func (h *browserHost) EndTabStatus(uri workspaceapi.URI) error {
+	if !h.comp.EndTabStatus(uri) {
+		return errors.New("end tab status called on unknown tab")
 	}
 	return nil
 }

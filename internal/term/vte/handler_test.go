@@ -39,6 +39,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/cell"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte/vtetest"
 	"unstable.build/rune/internal/workspace"
 	"unstable.build/rune/internal/workspace/workspacetest"
@@ -279,7 +280,8 @@ func (r *tabExiterRecorder) OnTabExit(uri workspaceapi.URI) bool {
 	return true
 }
 
-func (r *tabExiterRecorder) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (r *tabExiterRecorder) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (r *tabExiterRecorder) EndTabStatus(workspaceapi.URI) error                       { return nil }
 
 func (r *tabExiterRecorder) ExitedURIs() []workspaceapi.URI {
 	r.mu.Lock()
@@ -672,7 +674,10 @@ func (n *recordingNotifications) Messages() []string {
 }
 
 func newHandleTestHandler(master workspaceapi.File) *Handler {
-	ph := &parserHandler{keyboard: new(keyboardState)}
+	ph := &parserHandler{
+		keyboard: new(keyboardState),
+		tm:       new(tabExiterRecorder),
+	}
 	handler := &Handler{
 		comp: &Component{
 			pty:           workspaceapi.Pty{Master: master},
@@ -684,6 +689,7 @@ func newHandleTestHandler(master workspaceapi.File) *Handler {
 	}
 	handler.comp.scroll.InitPerformance(cell.NewBuffer())
 	handler.comp.scroll.InvertOffset = true
+	ph.sync.mu = &handler.comp.mu
 	return handler
 }
 

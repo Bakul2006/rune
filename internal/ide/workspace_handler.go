@@ -28,6 +28,7 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +89,7 @@ import (
 	"unstable.build/rune/internal/llm/llamaserver"
 	"unstable.build/rune/internal/llm/llmrouter"
 	"unstable.build/rune/internal/localstorage"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/text"
 	"unstable.build/rune/internal/text/emacs"
 	"unstable.build/rune/internal/text/exoeditor"
@@ -157,7 +159,6 @@ type workspaceManagerHandler struct {
 	tabBarHeight            int
 	builtinExtensions       map[string]Extension
 	workspaceConfigFilename string
-	tabAttentionNameSuffix  string
 	workspaceBarKind        workspaceBarKind
 	userHome                string
 	state                   *idehistory.Store
@@ -186,10 +187,18 @@ type workspaceManagerHandler struct {
 	commandHistory          command.HistoryAccessor
 	workspaceOpenCompleters map[string]command.Completer
 
-	union               handler.FrameUnion
-	bar                 handler.Tabs
-	shadedBar           *handler.ShadedTabs
-	barIdxToSlot        []int
+	union        handler.FrameUnion
+	bar          handler.Tabs
+	shadedBar    *handler.ShadedTabs
+	barIdxToSlot []int
+	// barFocusAttr and friends are the bar's own focus-dependent
+	// attributes, which the status and notification decorations are
+	// layered over.
+	barFocusAttr        term.Attributes
+	barNonFocusAttr     term.Attributes
+	barFocusIconAttr    term.Attributes
+	barNonFocusIconAttr term.Attributes
+	status              *statusStore
 	focusProxy          handler.Proxy
 	width, height       int
 	workspaces          [workspaceSlots]*workspaceHandler
@@ -695,6 +704,11 @@ func (h *workspaceManagerHandler) init(
 	h.extReadyWait = extensionReadyWait
 	h.extCommandWait = extensionCommandWait
 	h.extHandleWait = extensionHandleWait
+	notifyStatus := cfg.tabStatusNotifyConfig()
+	if !cfg.tabStatusEnabled() {
+		notifyStatus = tabStatusNotifyConfig{}
+	}
+	h.status = newStatusStore(h, tabStatusConfigFor(cfg), notifyStatus, h.scheduleNextTick)
 
 	homeWorkspace, err := h.workspace.AddWorkspace(ctx, homeDirUri)
 	if err != nil {
@@ -813,6 +827,10 @@ func (h *workspaceManagerHandler) init(
 	h.bar.SetAttr(focusTabAttr, nonFocusTabAttr,
 		focusTabIconAttr, nonFocusTabIconAttr,
 		highlightAttr, frameAttr, backgroundAttr)
+	h.barFocusAttr = focusTabAttr
+	h.barNonFocusAttr = nonFocusTabAttr
+	h.barFocusIconAttr = focusTabIconAttr
+	h.barNonFocusIconAttr = nonFocusTabIconAttr
 	h.bar.SetFrameCharSet(cfg.windowFrameCharset())
 	h.bar.SetBorder(cfg.frame())
 	h.bar.SetBottomHighlight(true)
@@ -990,19 +1008,19 @@ func (h *workspaceManagerHandler) envSource(name string) (string, bool) {
 	return "", false
 }
 
-func (h *workspaceManagerHandler) setWorkspaceRequiresAttention(
-	uri workspaceapi.URI, attr term.Attributes,
+func (h *workspaceManagerHandler) addWorkspaceNotification(
+	uri workspaceapi.URI, level browserapi.NotificationLevel, attr term.Attributes,
 ) {
 	// Notifications arrive on background goroutines (e.g. VTE run
-	// workers), so the layout rebuild in Resize must be marshaled
-	// onto the event loop to avoid racing Draw/Resize.
+	// workers), so the bar update must be marshaled onto the event
+	// loop to avoid racing Draw/Resize.
 	h.scheduleNextTick(func() {
 		for _, w := range h.workspaces {
 			if w == nil || w.uri.String() != uri.String() {
 				continue
 			}
-			w.attentionAttr = attr
-			h.Resize(h.width, h.height)
+			w.notifs.add(level, attr)
+			h.decorateWorkspaceBar()
 			break
 		}
 	})
@@ -1176,10 +1194,6 @@ func (h *workspaceManagerHandler) Resize(width, height int) {
 			name := h.makeWorkspaceTabName(i, w)
 			idx := h.bar.Add(rune(int(h.workspacesIcon)+i), name)
 			h.barIdxToSlot = append(h.barIdxToSlot, i)
-			if w.attentionAttr != (term.Attributes{}) {
-				h.bar.SetTabAttr(idx, w.attentionAttr)
-				h.bar.SetTabName(idx, name+h.tabAttentionNameSuffix)
-			}
 			if i == h.focus {
 				barFocusIdx = idx
 				if !drawBar {
@@ -1194,6 +1208,7 @@ func (h *workspaceManagerHandler) Resize(width, height int) {
 	}
 	h.bar.SetFocus(barFocusIdx)
 	h.bar.SetHighlight(barFocusIdx)
+	h.decorateWorkspaceBar()
 	h.empty.Resize(width, height)
 	// bar needs to be drawn last so frame union characters
 	// are drawn last
@@ -1269,12 +1284,15 @@ func (h *workspaceManagerHandler) switchToWorkspace(i int) bool {
 			w.ex.onFocusChange(false)
 		} else {
 			h.empty.container.PauseAll()
+			h.empty.onFocusChange(false)
 		}
 		if w := h.workspaces[i]; w != nil {
-			w.attentionAttr = term.Attributes{}
+			w.bellAttr = term.Attributes{}
+			w.notifs = pendingNotifications{}
 			w.ex.onFocusChange(true)
 			w.ex.container.ResumeAll()
 		} else {
+			h.empty.onFocusChange(true)
 			h.empty.container.ResumeAll()
 		}
 	}
@@ -1509,7 +1527,12 @@ func (h *workspaceManagerHandler) textOpts(
 			cfg.animationsActiveTabShader(animActiveContentTab),
 			cfg.animationsActiveTabFPS(animActiveContentTab),
 			cfg.animationsActiveTabLoop(animActiveContentTab)),
-		text.WithOnTabActivity(h.refreshWorkspaceActivity),
+		text.WithOnTabStatus(func(
+			tab workspaceapi.URI, _, status programstatus.Summary,
+		) {
+			h.status.tabStatusChanged(uri, tab, status)
+		}),
+		text.WithTabStatusConfig(tabStatusConfigFor(cfg)),
 		text.WithIconSet(cfg.icons()),
 		text.WithTabOverrideIcon(cfg.tabOverrideIcon()),
 		text.WithCommandOverlayConfig(cfg.commandOverlayConfig()),
@@ -2275,7 +2298,7 @@ func (h *workspaceManagerHandler) buildExtensions(
 		}()
 	}
 	cmdAuthorizer, err := ideauthorizer.NewAuthorizer(
-		ed, promptOpener, promptStorage, cfg.scheduleNextTick, notifications,
+		ed, promptOpener, promptStorage, cfg.scheduleNextTick, ex.tm,
 		h.trust, ideauthorizer.Config{
 			AutoAuthorizeExtensions:        cfg.authorizerAutoAuthorizeExtensions(),
 			AutoAuthorizeCommands:          cfg.authorizerAutoAuthorizeCommands(),
@@ -2806,6 +2829,7 @@ func (h *workspaceManagerHandler) commandRenameWorkspace(args ...string) error {
 	name := args[0]
 	handler := h.workspaces[h.focus]
 	handler.tabname = name
+	h.status.refreshViews()
 	h.Resize(h.width, h.height)
 	if err := h.state.PersistWorkspaceState(
 		context.Background(), handler.uri); err != nil {
@@ -3051,6 +3075,7 @@ func (h *workspaceManagerHandler) closeWorkspace() (
 	if err := hm.ex.Close(); err != nil {
 		log.Error(err)
 	}
+	h.status.dropWorkspace(uri)
 	// Detach the raw workspace so the background managerWorkspace.Close
 	// cannot write the manager maps off-loop.
 	if raw, ok := h.workspace.RemoveWorkspace(hm.uri); ok {
@@ -3149,6 +3174,7 @@ func (h *workspaceManagerHandler) moveWorkspace(args ...string) error {
 	h.workspaces[curr] = h.workspaces[next]
 	h.workspaces[next] = temp
 	h.focus = next
+	h.status.refreshViews()
 	h.events.setFocus(h.focusURI())
 	h.persistLastSession()
 	h.Resize(h.width, h.height)
@@ -3227,8 +3253,13 @@ func (h *workspaceManagerHandler) Close() (ret error) {
 
 type workspaceHandler struct {
 	*ex
-	tabname             string
-	attentionAttr       term.Attributes
+	tabname string
+	// bellAttr is the attribute a bell rang while the workspace was out
+	// of focus set on its bar tab; notifs are the notifications it
+	// received meanwhile. Both are cleared when the workspace is
+	// focused.
+	bellAttr            term.Attributes
+	notifs              pendingNotifications
 	vctrlService        vctrl.Service
 	cursorHistoryCloser io.Closer
 	symbolDBCloser      io.Closer
@@ -3341,20 +3372,228 @@ func (h *workspaceManagerHandler) initTabs(
 	h.refreshWorkspaceActivity()
 }
 
-// workspaceActive reports whether any tab of the workspace in slot is
-// marked active by an extension.
-func (h *workspaceManagerHandler) workspaceActive(slot int) bool {
-	w := h.workspaces[slot]
-	return w != nil && w.ex != nil && w.ex.comp.HasActiveTabs()
+// workspaceShaded reports whether the workspace in slot runs the bar's
+// active-tab effect: only while its status roll-up is working. A
+// blocked, failed or finished tab takes precedence, as the effect
+// would wash out or repaint its colour, hiding that the workspace
+// needs the user rather than just being busy.
+func (h *workspaceManagerHandler) workspaceShaded(slot int) bool {
+	sum, _ := h.workspaceStatus(slot)
+	return sum.State == programstatus.Working
 }
 
-// workspaceShaded reports whether the workspace in slot runs the bar's
-// active-tab effect. A pending notification takes precedence: the
-// effect would wash out or repaint its colour, hiding that the
-// workspace needs the user rather than just being busy.
-func (h *workspaceManagerHandler) workspaceShaded(slot int) bool {
-	return h.workspaceActive(slot) &&
-		h.workspaces[slot].attentionAttr == (term.Attributes{})
+// workspaceStatus returns the status roll-up of the workspace in slot
+// and the uri it was reported at, or an empty idle status when the
+// slot holds no workspace.
+func (h *workspaceManagerHandler) workspaceStatus(slot int) (
+	programstatus.Summary, workspaceapi.URI,
+) {
+	w := h.workspaces[slot]
+	if w == nil {
+		return programstatus.Summary{Progress: -1}, workspaceapi.URI{}
+	}
+	return h.status.rollup(w.uri)
+}
+
+// commandStatusList opens the status inbox over the focused workspace:
+// a floating list of every reported status across workspaces, where
+// selecting a row focuses its workspace and tab. It takes no arguments.
+func (h *workspaceManagerHandler) commandStatusList(args ...string) error {
+	if len(args) != 0 {
+		return errors.New("expected no arguments")
+	}
+	_, err := h.focusEx().Browser().Floating(h.status.view(), browserapi.FloatingConfig{
+		Alignment: component.AlignmentCentered,
+	})
+	return err
+}
+
+// focusStatusEntry switches to the workspace of entry and shows its
+// tab in the focused window, or focuses the window already showing
+// it. For a terminal that is no tab, switching workspace is enough.
+// It fails when the workspace or the tab is gone.
+func (h *workspaceManagerHandler) focusStatusEntry(entry statusEntry) error {
+	slot, _, ok := h.statusWorkspace(entry.ws)
+	if !ok {
+		return errors.New("workspace is gone")
+	}
+	if !h.switchToWorkspace(slot) {
+		return fmt.Errorf("switch to workspace %d", slot+1)
+	}
+	b := h.workspaces[slot].ex.comp.Browser()
+	tab, ok := b.Tab(entry.uri)
+	if !ok {
+		if _, ok := h.status.status(entry.ws, entry.uri); ok {
+			return nil
+		}
+		return errors.New("tab is gone")
+	}
+	if win, ok := tab.Window(); ok {
+		b.SetFocus(win)
+		return nil
+	}
+	idx := slices.IndexFunc(b.Tabs(), func(t *browser.Tab) bool {
+		return t.URI().Equal(entry.uri)
+	})
+	if !b.SetContentToTab(b.Focus(), idx) {
+		return errors.New("show tab")
+	}
+	return nil
+}
+
+// decorateWorkspaceBar repaints every bar tab from its workspace's
+// status roll-up, bell and pending notifications. It must be called on
+// the host event loop whenever any of these change.
+func (h *workspaceManagerHandler) decorateWorkspaceBar() {
+	for idx, slot := range h.barIdxToSlot {
+		w := h.workspaces[slot]
+		if w == nil {
+			continue
+		}
+		sum, _ := h.workspaceStatus(slot)
+		nameAttr, iconAttr := h.status.cfg.BarAttrs(sum)
+		if nameAttr == (term.Attributes{}) {
+			nameAttr = w.bellAttr
+		}
+		if nameAttr != (term.Attributes{}) {
+			h.bar.SetTabAttr(idx, nameAttr)
+		} else {
+			h.bar.ResetTabAttr(idx)
+		}
+		base := h.barNonFocusIconAttr
+		if slot == h.focus {
+			base = h.barFocusIconAttr
+		}
+		if iconAttr != (term.Attributes{}) {
+			h.bar.SetIconAttr(idx, term.AttributesUnion(base, iconAttr))
+		} else {
+			h.bar.ResetIconAttr(idx)
+		}
+		if sum.State == programstatus.Working && sum.Progress >= 0 {
+			h.bar.SetTabProgress(idx, sum.Progress, h.status.cfg.WorkingDoneAttr)
+		} else {
+			h.bar.ResetTabProgress(idx)
+		}
+		if w.notifs.count > 0 {
+			base := h.barNonFocusAttr
+			if slot == h.focus {
+				base = h.barFocusAttr
+			}
+			h.bar.SetTabBadge(idx, superscript(w.notifs.count),
+				term.AttributesUnion(base, w.notifs.attr))
+		} else {
+			h.bar.ResetTabBadge(idx)
+		}
+	}
+}
+
+// superscript renders the decimal digits of n as superscript
+// characters. A negative n renders as its absolute value.
+func superscript(n int) string {
+	const digits = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+	runes := []rune(digits)
+	if n < 0 {
+		n = -n
+	}
+	var out []rune
+	for {
+		out = append([]rune{runes[n%10]}, out...)
+		n /= 10
+		if n == 0 {
+			break
+		}
+	}
+	return string(out)
+}
+
+// pendingNotifications counts the notifications a workspace received
+// while out of focus, keeping the attribute of the highest level among
+// them.
+type pendingNotifications struct {
+	count int
+	level browserapi.NotificationLevel
+	attr  term.Attributes
+}
+
+func (p *pendingNotifications) add(level browserapi.NotificationLevel, attr term.Attributes) {
+	if p.count == 0 || notificationLevelRank(level) > notificationLevelRank(p.level) {
+		p.level = level
+		p.attr = attr
+	}
+	p.count++
+}
+
+func notificationLevelRank(level browserapi.NotificationLevel) int {
+	switch level {
+	case browserapi.LevelError:
+		return 3
+	case browserapi.LevelWarn:
+		return 2
+	case browserapi.LevelInfo:
+		return 1
+	}
+	return 0
+}
+
+func (h *workspaceManagerHandler) statusWorkspace(ws workspaceapi.URI) (int, string, bool) {
+	for slot, w := range h.workspaces {
+		if w != nil && w.uri.Equal(ws) {
+			return slot, h.makeWorkspaceTabName(slot, w), true
+		}
+	}
+	return 0, "", false
+}
+
+func (h *workspaceManagerHandler) statusTabName(ws, uri workspaceapi.URI) (string, bool) {
+	e := h.exForWorkspace(ws)
+	if e == nil {
+		return "", false
+	}
+	name, _, ok := e.comp.Browser().TabName(uri)
+	return name, ok
+}
+
+func (h *workspaceManagerHandler) statusInSight(ws, uri workspaceapi.URI) bool {
+	e := h.exForWorkspace(ws)
+	if e == nil || h.focusEx() != e {
+		return false
+	}
+	if _, ok := e.comp.Browser().Tab(uri); !ok {
+		return true
+	}
+	focused, ok := e.comp.FocusTab()
+	return ok && focused.URI().Equal(uri)
+}
+
+func (h *workspaceManagerHandler) notifyStatus(ws workspaceapi.URI, level browserapi.NotificationLevel, msg string) {
+	if e := h.exForWorkspace(ws); e != nil {
+		_, _ = e.notifications.Notify(level, "%s", msg)
+	}
+}
+
+func (h *workspaceManagerHandler) statusChanged(workspaceapi.URI) {
+	h.refreshWorkspaceActivity()
+	h.decorateWorkspaceBar()
+}
+
+func (h *workspaceManagerHandler) showStatus(ws, uri workspaceapi.URI) {
+	if err := h.focusStatusEntry(statusEntry{ws: ws, uri: uri}); err != nil {
+		_, _ = h.focusEx().notifications.Notify(browserapi.LevelError, "%s: %v", cmdStatusList, err)
+	}
+}
+
+// exForWorkspace returns the ex of the workspace at uri, the home ex
+// for the home uri, or nil.
+func (h *workspaceManagerHandler) exForWorkspace(uri workspaceapi.URI) *ex {
+	for _, w := range h.workspaces {
+		if w != nil && w.ex != nil && w.uri.Equal(uri) {
+			return w.ex
+		}
+	}
+	if h.empty != nil && h.homeURI.Equal(uri) {
+		return h.empty
+	}
+	return nil
 }
 
 // activeWorkspaceBarIndices returns the workspace bar indices of the
@@ -3495,6 +3734,16 @@ func (h *workspaceManagerHandler) subscribeActiveWorkspaceCommands(ex *ex) (ret 
 					"workspaceopen is currently pending, the wait starts after " +
 					"that workspace finishes installing.",
 				Synopsis: "<extension-id> <command> [<args>...]",
+			},
+		},
+		cmdStatusList: {
+			handler: (*workspaceManagerHandler).commandStatusList,
+			man: textapi.CommandManual{
+				Summary: "Opens the status inbox: a floating list of every tab " +
+					"whose program reported a status (OSC 7501) across all " +
+					"workspaces, most pressing first: blocked on you, failed, " +
+					"finished, then working. Selecting a row focuses its " +
+					"workspace and tab.",
 			},
 		},
 	}
@@ -4096,6 +4345,7 @@ func (f *workspaceTabManager) SetTabName(
 	}
 	f.parent.scheduleNextTick(func() {
 		_ = f.tm.SetTabName(uri, name, attr)
+		f.parent.status.refreshViews()
 		if attr == (term.Attributes{}) {
 			log.Debugf("SetTabName called on workspace tab manager %p: "+
 				"empty attributes", f)
@@ -4110,9 +4360,9 @@ func (f *workspaceTabManager) SetTabName(
 		// set workspace tab attr as well if workspace not in focus
 		if f.parent.focusHandler() != f.workspace {
 			log.Debugf("SetTabName called on workspace tab manager %p: "+
-				"setting attention attrs", f)
-			f.workspace.attentionAttr = attr
-			f.parent.Resize(f.parent.width, f.parent.height)
+				"setting bell attrs", f)
+			f.workspace.bellAttr = attr
+			f.parent.decorateWorkspaceBar()
 			return
 		}
 		log.Debugf("SetTabName called on workspace tab manager %p: "+
@@ -4125,21 +4375,53 @@ func (f *workspaceTabManager) OnTabExit(uri workspaceapi.URI) bool {
 	return f.tm != nil && f.tm.OnTabExit(uri)
 }
 
-// SetTabActivity satisfies browser.TabManager. Callers may be off the
-// event loop, so the mark is applied on the next tick; the browser then
-// reports the change back through refreshWorkspaceActivity.
-func (f *workspaceTabManager) SetTabActivity(
-	uri workspaceapi.URI, active bool,
+// SetTabStatus satisfies browser.TabManager. It may be called from any
+// goroutine: the report is applied on the next tick. A report for a
+// uri that is no tab is kept for the workspace instead.
+func (f *workspaceTabManager) SetTabStatus(
+	uri workspaceapi.URI, report programstatus.Report,
 ) error {
 	if f.tm == nil {
 		return errors.New("tab manager is not initialized")
 	}
 	f.parent.scheduleNextTick(func() {
-		if err := f.tm.SetTabActivity(uri, active); err != nil {
-			log.Debugf("SetTabActivity on workspace tab manager %p: %v", f, err)
+		if ws, ok := f.statusWorkspace(); ok {
+			if err := f.parent.status.setTabStatus(ws, f.tm, uri, report); err != nil {
+				log.Warnf("set tab status %s: %v", uri, err)
+			}
 		}
 	})
 	return nil
+}
+
+// EndTabStatus satisfies browser.TabManager. Like SetTabStatus, it may
+// be called from any goroutine and covers uris that are no tab.
+func (f *workspaceTabManager) EndTabStatus(uri workspaceapi.URI) error {
+	if f.tm == nil {
+		return errors.New("tab manager is not initialized")
+	}
+	f.parent.scheduleNextTick(func() {
+		if ws, ok := f.statusWorkspace(); ok {
+			if err := f.parent.status.endTabStatus(ws, f.tm, uri); err != nil {
+				log.Warnf("end tab status %s: %v", uri, err)
+			}
+		}
+	})
+	return nil
+}
+
+// statusWorkspace rejects queued reports from a workspace that has
+// closed, including one replaced by a new workspace at the same URI.
+func (f *workspaceTabManager) statusWorkspace() (workspaceapi.URI, bool) {
+	if f.workspace != nil {
+		for _, w := range f.parent.workspaces {
+			if w == f.workspace {
+				return w.uri, true
+			}
+		}
+		return workspaceapi.URI{}, false
+	}
+	return f.parent.homeURI, f.parent.empty != nil && !f.parent.empty.closed
 }
 
 func lspCommandsConfig(

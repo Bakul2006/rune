@@ -25,6 +25,8 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/component"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"github.com/unstablebuild/rune-go-sdk/tui"
+	"unstable.build/rune/internal/browser"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // Window represents a closeable window in a WindowManager.
@@ -96,8 +98,9 @@ type Browser interface {
 		workspaceapi.URI, string, term.Attributes,
 	) error
 
-	// SetTabActivity marks the given tab as active or idle.
-	SetTabActivity(workspaceapi.URI, bool) error
+	// SetTabStatus applies a status report to the given tab. See
+	// browser.TabManager.SetTabStatus.
+	SetTabStatus(workspaceapi.URI, programstatus.Report) error
 
 	// Focus returns the current Window in focus.
 	Focus() (Window, error)
@@ -234,10 +237,14 @@ func (a *browserAdapter) CloseWindow(
 	return bw.Close()
 }
 
-func (a *browserAdapter) SetTabActivity(
-	uri workspaceapi.URI, active bool,
+func (a *browserAdapter) SetTabStatus(
+	uri workspaceapi.URI, status browserapi.TabStatus,
 ) error {
-	return a.b.SetTabActivity(uri, active)
+	report, err := browser.ReportFromTabStatus(status, programstatus.HostApp)
+	if err != nil {
+		return err
+	}
+	return a.b.SetTabStatus(uri, report)
 }
 
 func (a *browserAdapter) Interrupt(

@@ -36,6 +36,7 @@ import (
 	status "google.golang.org/grpc/status"
 	"unstable.build/rune/internal/browser"
 	thandlerrpc "unstable.build/rune/internal/handler/handlerrpc"
+	"unstable.build/rune/internal/workspace/processctx"
 )
 
 // Server serves a Browser over GRPC.
@@ -285,23 +286,43 @@ func (s *Server) Focus(
 	return res, nil
 }
 
-// SetTabActivity satisfies BrowserServer.
-func (s *Server) SetTabActivity(
-	ctx context.Context, req *browserrpc.SetTabActivityRequest,
-) (*browserrpc.SetTabActivityResponse, error) {
+// SetTabStatus satisfies BrowserServer.
+func (s *Server) SetTabStatus(
+	ctx context.Context, req *browserrpc.SetTabStatusRequest,
+) (*browserrpc.SetTabStatusResponse, error) {
 	uri, err := workspaceapi.ParseURI(req.GetResourceId())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument,
 			"parse resource id %q: %v", req.GetResourceId(), err)
 	}
+	if req.GetState() > uint32(browserapi.TabClear) {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"unknown tab state %d", req.GetState())
+	}
+	if req.GetKind() > uint32(browserapi.TabKindAuth) {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"unknown tab blocked kind %d", req.GetKind())
+	}
+	app, _ := processctx.ExtensionIDFromContext(ctx)
+	report, err := browser.ReportFromTabStatus(browserapi.TabStatus{
+		ID:       req.GetId(),
+		State:    browserapi.TabState(req.GetState()),
+		Kind:     browserapi.TabBlockedKind(req.GetKind()),
+		Progress: int(req.GetProgress()),
+		Title:    req.GetTitle(),
+		Message:  req.GetMessage(),
+	}, app)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "tab status: %v", err)
+	}
 
 	s.browser.Lock()
 	defer s.browser.Unlock()
 
-	if err := s.browser.SetTabActivity(uri, req.GetActive()); err != nil {
+	if err := s.browser.SetTabStatus(uri, report); err != nil {
 		return nil, err
 	}
-	return new(browserrpc.SetTabActivityResponse), nil
+	return new(browserrpc.SetTabStatusResponse), nil
 }
 
 // CloseWindow satisfies BrowserServer.

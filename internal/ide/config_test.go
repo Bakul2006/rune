@@ -46,6 +46,7 @@ import (
 	"unstable.build/rune/internal/ide/idelsp"
 	"unstable.build/rune/internal/ide/plugin"
 	"unstable.build/rune/internal/ide/syntax"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/text"
 	"unstable.build/rune/internal/text/standard"
@@ -353,6 +354,38 @@ terminal:
         fg: red
         flags:
           - blink
+    status:
+        enabled: true
+        spinner: "abc"
+        spinner_fps: 4
+        icons:
+            permission: "P"
+            question: "Q"
+            auth: "A"
+            done: "D"
+            error: "E"
+        idle_icon_attr:
+            fg: green
+        working_icon_attr:
+            fg: teal
+        working_done_attr:
+            fg: lime
+        blocked_attr:
+            fg: olive
+        blocked_icon_attr:
+            fg: maroon
+        done_attr:
+            fg: navy
+        done_icon_attr:
+            fg: purple
+        error_attr:
+            fg: fuchsia
+        error_icon_attr:
+            fg: aqua
+        notify:
+          - blocked
+          - error
+        notify_interval: 5s
 `
 
 func assertDefaultConfig(t *testing.T, cfg *ideConfig) {
@@ -437,6 +470,9 @@ func assertDefaultConfig(t *testing.T, cfg *ideConfig) {
 		MaxLines:                 10_000,
 		MinWidth:                 defaultMinWidth,
 	}, vteConfig)
+	assert.True(t, cfg.tabStatusEnabled())
+	assert.Equal(t, browser.DefaultTabStatusConfig(), cfg.tabStatusConfig())
+	assert.Equal(t, defaultTabStatusNotifyConfig(), cfg.tabStatusNotifyConfig())
 	assert.Equal(t, command.DefaultConfig().ShowManual, cfg.commandOverlayShowManual())
 	assert.Equal(t, command.DefaultConfig().ManualAttr, cfg.commandOverlayManualAttr())
 	assert.Zero(t, cfg.defaultAttr())
@@ -472,6 +508,22 @@ func TestConfigDefault(t *testing.T) {
 	initDefaultConfig(ret, browser.NopWallpaper(),
 		term.RingBell, term.ScheduleNextTick, "")
 	assertDefaultConfig(t, ret)
+}
+
+func TestTabStatusConfigIgnoresPluginIcons(t *testing.T) {
+	m, err := decodeConfig(strings.NewReader(`
+terminal:
+    plugin:
+        status_error_icon: "X"
+        status_success_icon: "$"
+`))
+	require.NoError(t, err)
+	var cfg ideConfig
+	initConfig(&cfg, m, browser.NopWallpaper(), term.RingBell, term.ScheduleNextTick, "")
+	def := browser.DefaultTabStatusConfig()
+	got := cfg.tabStatusConfig()
+	assert.Equal(t, def.DoneIcon, got.DoneIcon)
+	assert.Equal(t, def.ErrorIcon, got.ErrorIcon)
 }
 
 // assertTerminalSearchConfig pins the terminal's scrollback search and
@@ -1587,6 +1639,37 @@ func TestConfigSetting(t *testing.T) {
 		MinWidth:                 defaultMinWidth,
 	}
 	assert.Equal(t, expectedEmulatorConfig, vteConfig)
+
+	assert.True(t, cfg.tabStatusEnabled())
+	assert.Equal(t, browser.TabStatusConfig{
+		Spinner:    []rune("abc"),
+		SpinnerFPS: 4,
+		BlockedIcons: map[programstatus.Kind]rune{
+			programstatus.KindNone:       'P',
+			programstatus.KindPermission: 'P',
+			programstatus.KindQuestion:   'Q',
+			programstatus.KindAuth:       'A',
+		},
+		DoneIcon:        'D',
+		ErrorIcon:       'E',
+		IdleIconAttr:    term.Attributes{Fg: term.ColorGreen},
+		WorkingIconAttr: term.Attributes{Fg: term.ColorTeal},
+		WorkingDoneAttr: term.Attributes{Fg: term.ColorLime},
+		BlockedAttr:     term.Attributes{Fg: term.ColorOlive},
+		BlockedIconAttr: term.Attributes{Fg: term.ColorMaroon},
+		DoneAttr:        term.Attributes{Fg: term.ColorNavy},
+		DoneIconAttr:    term.Attributes{Fg: term.ColorPurple},
+		ErrorAttr:       term.Attributes{Fg: term.ColorFuchsia},
+		ErrorIconAttr:   term.Attributes{Fg: term.ColorAqua},
+	}, cfg.tabStatusConfig())
+	assert.Equal(t, tabStatusNotifyConfig{
+		states: map[programstatus.State]bool{
+			programstatus.Blocked: true,
+			programstatus.Error:   true,
+		},
+		interval: 5 * time.Second,
+		messages: true,
+	}, cfg.tabStatusNotifyConfig())
 
 	expectedPrompt := browser.PromptConfig{
 		TextAttr:      term.Attributes{Fg: term.ColorTeal},

@@ -44,6 +44,7 @@ import (
 	"unstable.build/rune/internal/browser"
 	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/plugin"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/text/cmdenv"
 	"unstable.build/rune/internal/workspace/workspacetest"
@@ -1480,7 +1481,8 @@ func (m *fakeBrowser) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (m *fakeBrowser) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *fakeBrowser) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (m *fakeBrowser) EndTabStatus(workspaceapi.URI) error                       { return nil }
 
 func (m *fakeBrowser) Floating(h browser.Floating, cfg browserapi.FloatingConfig) (
 	browser.Window, error,

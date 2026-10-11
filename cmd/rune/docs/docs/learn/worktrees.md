@@ -151,11 +151,22 @@ When you run work in parallel, you are not watching every workspace at once. So
 Rune surfaces activity from the workspaces you are **not** looking at.
 
 When a notification is posted on a workspace that is not currently in focus,
-Rune highlights that workspace's tab in the notification's color and holds the
-notification open until you switch to it. The tab of the workspace that finished
-a build, hit an error, or needs your input lights up, and you can jump straight
-there without hunting through tabs. (You can tune the highlight with the
-workspace bar's `needs_attention_attr`.)
+Rune holds the notification open until you switch to it and counts it in a
+superscript badge after that workspace's tab, in the color of the highest level
+pending (`2 api²`). The tab of the workspace that finished a build, hit an
+error, or needs your input shows the badge, and you can jump straight there
+without hunting through tabs. Focusing the workspace clears it.
+
+Programs that report their [status](../develop/runectl.md#program-status) over
+OSC 7501 (`runectl status`, agents, builds) also show on the workspace bar: the
+tab takes the color pair of the most pressing status among the workspace's
+terminals, so a workspace that is blocked on you, failed, or finished reads at a
+glance even before any notification, and `:inbox` lists every reported status
+across workspaces so you can jump to the one that needs you. (Tune the colors
+under `terminal.status`.)
+
+Rune's own permission prompts, raised when an extension asks for something it
+was not granted, show as blocked on the workspace bar until you answer them.
 
 This works no matter where the notification comes from:
 

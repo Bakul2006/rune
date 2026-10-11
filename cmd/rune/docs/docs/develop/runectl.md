@@ -53,10 +53,135 @@ for a specific one. The main groups:
 | `runectl storage ...` | Create, read, update, and delete extension documents. |
 | `runectl llm ...` | Talk to the workspace's model router. |
 | `runectl mcp` | Start an MCP server over stdio exposing Rune's syntax and LSP tools. |
+| `runectl status <state> [message]` | Report program status to the terminal (OSC 7501): `idle`, `working`, `done`, `blocked`, `error`, or `clear`. |
+| `runectl status wrap -- <cmd> [args...]` | Run any command and report its progress and outcome to the terminal, with no changes to the command. |
 
 Most commands accept a `-F`/`--format` flag to choose the output format:
 `table` (the default, human-readable), `json` (for piping into other
 tools), or a Go template for custom shaping.
+
+## Program status
+
+`runectl status` speaks the [Program Status
+Protocol](https://www.superlogical.com/rex/docs/build/program-status)
+(OSC 7501): a program tells the terminal what it is doing, and Rune shows
+it on the tab, on the workspace bar, and as a notification when the tab
+is not in focus. Every new message a program reports (`runectl status
+<state> <message>`) comes through as a notification, even without a state
+change. Programs that speak the protocol themselves need no help from
+`runectl`.
+
+### Wrap any command
+
+`runectl status wrap` gives any command a status, with no changes to the
+command and no integration work. Put it in front of a build, a test run,
+a deploy, or a download, then go do something else: the tab spins while
+the command runs, and when it ends the tab turns green or red and Rune
+notifies you, even if you are in another workspace.
+
+```
+runectl status wrap -- cargo build --release
+```
+
+The command runs exactly as it would without `wrap`: it keeps your
+terminal, so prompts, colours, and progress bars work as usual, and
+`Ctrl-C` and other signals reach it. `wrap` reports `working` when the
+command starts and the outcome when it ends, then exits with the
+command's own status, so scripts, `&&` chains, and CI steps behave the
+same with or without it:
+
+| When the command | `wrap` reports | and exits with |
+| --- | --- | --- |
+| exits 0 | `done` | 0 |
+| exits with status N | `error`, `exit status N` | N |
+| is killed by a signal, e.g. `Ctrl-C` | `idle` | 128 + the signal number |
+| cannot be started | `error`, with the reason | 1 |
+
+`--app` names the program and `--msg` sets the message shown while it
+runs and when it is done; it defaults to the command line:
+
+```
+runectl status wrap --app terraform --msg "apply production" -- terraform apply
+```
+
+**Make it the default.** An alias wraps a tool every time you run it from
+your shell, with nothing else to remember:
+
+```sh
+alias make='runectl status wrap --app make -- make'
+alias cargo='runectl status wrap --app cargo -- cargo'
+```
+
+**Hook it into a Makefile.** Wrap the long targets so everyone who runs
+them gets a spinner while they run and a result when they finish:
+
+```make
+test:
+	runectl status wrap --app make --msg "go test" -- go test ./...
+```
+
+**Hook it into git.** A `pre-push` hook can flag a slow check while it
+runs and leave a `done` or `error` record behind for you to find:
+
+```sh
+#!/bin/sh
+runectl status wrap --app git --msg "pre-push checks" -- make lint test
+```
+
+### How Rune shows it
+
+A working tab's icon spins and its name fills up as a progress bar when
+the program reports one; a tab that is blocked on you,
+failed, or finished takes the colour pair configured for that state under
+`terminal.status`, and a program that reports `idle` (waiting on you)
+colours the tab's icon. The workspace bar shows the most pressing status
+among a workspace's tabs, including terminals that are not tabs, such as
+`!` commands and tasks. `:statuslist` (alias `:inbox`) lists every
+reported status across workspaces, most pressing first, and jumps to the
+tab you pick. A `done` or `error` status clears once you focus the tab
+or press a key in it; `working` and `blocked` clear when the program
+exits or the shell shows its next prompt. A terminal that is not a tab
+keeps its `done` or `error` status until it closes.
+
+### Report status yourself
+
+The first argument is the state, the optional second one a message:
+
+```
+runectl status working "Installing updates"
+runectl status blocked --kind permission "Deploy to production?"
+runectl status done "Upgraded 12 packages"
+runectl status error "rsync failed"
+runectl status idle
+runectl status clear
+```
+
+`--app` names the program (`cargo`, `terraform`), `--title` labels the
+record, `--progress 0-100` adds a percentage to `working` or `blocked`,
+and `--id build/test` addresses one of several records so a tool can
+report a tree of tasks. `clear` removes the addressed record and
+everything beneath it, or every record when no `--id` is given.
+
+**Hook it into an agent.** Agents that expose lifecycle hooks can report
+when they stop to ask for permission, and when they are done, so you can
+let them run in the background and come back when they need you:
+
+```sh
+# permission hook
+runectl status blocked --kind permission --app my-agent "Allow running tests?"
+# stop hook
+runectl status done --app my-agent "Finished implementing the feature"
+```
+
+### See it in action
+
+`demo` plays the examples from the specification so you can see how Rune
+renders each state, with progress running from 0 to 100% while working
+(`--progress-duration`, 8 seconds by default):
+
+```
+runectl status demo --scenario deploy
+```
 
 ## Composing with POSIX tools
 

@@ -76,6 +76,14 @@ type tab struct {
 	// callers hit-test separately from the tab body via TabActionAt.
 	action     rune
 	actionAttr term.Attributes
+	// progress, when not -1, paints the first progress% of the drawn
+	// name cells with progressAttr layered over the name attributes.
+	progress     int
+	progressAttr term.Attributes
+	// badge is drawn right after the name with badgeAttr and is kept in
+	// preference to the name's tail when the tab is truncated.
+	badge     string
+	badgeAttr term.Attributes
 }
 
 // Tabs is a simple component that draws a list of component
@@ -344,6 +352,28 @@ func (t *Tabs) SetIconAttr(idx int, attr term.Attributes) {
 	t.dirty = true
 }
 
+// ResetIconAttr restores the focus-dependent icon attributes of the
+// tab at idx. If the tab at idx does not exist, this method will panic.
+func (t *Tabs) ResetIconAttr(idx int) {
+	t.tabs[idx].iconAttr = nil
+	t.dirty = true
+}
+
+// TabIconAttr returns the attributes the icon of the tab at idx is
+// drawn with: the override set via SetIconAttr or, without one, the
+// focus-dependent ones. If the tab at idx does not exist, this method
+// will panic.
+func (t *Tabs) TabIconAttr(idx int) term.Attributes {
+	tab := t.tabs[idx]
+	if tab.iconAttr != nil {
+		return *tab.iconAttr
+	}
+	if tab.focus {
+		return t.focusIconAttr
+	}
+	return t.nonFocusIconAttr
+}
+
 // TabAttr returns the attributes of the tab at idx. If the tab at idx does not exist,
 // this method will panic.
 func (t *Tabs) TabAttr(idx int) term.Attributes {
@@ -406,6 +436,50 @@ func (t *Tabs) SetTabAction(idx int, action rune, attr term.Attributes) {
 	t.dirty = true
 }
 
+// SetTabProgress paints the leading pct percent of the name of the tab
+// at idx with attr layered over its usual attributes. pct is clamped
+// to 0 to 100. If the tab at idx does not exist, this method will
+// panic.
+func (t *Tabs) SetTabProgress(idx int, pct int, attr term.Attributes) {
+	t.tabs[idx].progress = max(0, min(100, pct))
+	t.tabs[idx].progressAttr = attr
+	t.dirty = true
+}
+
+// ResetTabProgress removes the progress painting of the tab at idx.
+func (t *Tabs) ResetTabProgress(idx int) {
+	t.tabs[idx].progress = -1
+	t.tabs[idx].progressAttr = term.Attributes{}
+	t.dirty = true
+}
+
+// TabProgress returns the progress painted on the tab at idx and its
+// attributes, or -1 without any. If the tab at idx does not exist,
+// this method will panic.
+func (t *Tabs) TabProgress(idx int) (int, term.Attributes) {
+	return t.tabs[idx].progress, t.tabs[idx].progressAttr
+}
+
+// SetTabBadge draws text with attr right after the name of the tab at
+// idx. The badge counts towards the tab's width and survives
+// truncation ahead of the name's tail. An empty text removes it.
+func (t *Tabs) SetTabBadge(idx int, text string, attr term.Attributes) {
+	t.tabs[idx].badge = text
+	t.tabs[idx].badgeAttr = attr
+	t.dirty = true
+}
+
+// ResetTabBadge removes the badge of the tab at idx.
+func (t *Tabs) ResetTabBadge(idx int) {
+	t.SetTabBadge(idx, "", term.Attributes{})
+}
+
+// TabBadge returns the badge of the tab at idx and its attributes. If
+// the tab at idx does not exist, this method will panic.
+func (t *Tabs) TabBadge(idx int) (string, term.Attributes) {
+	return t.tabs[idx].badge, t.tabs[idx].badgeAttr
+}
+
 // SetTabDefaultIcon sets the default icon of the tab at idx. Calls to
 // ResetTabIcon will reset the tab icon to the given icon. If the tab
 // at idx does not exist, this method will panic.
@@ -454,12 +528,13 @@ func (t *Tabs) DefaultTabName(idx int) string {
 func (t *Tabs) Add(icon rune, name string) int {
 	t.dirty = true
 	tt := &tab{
-		defAttr: term.Attributes{},
-		attr:    term.Attributes{},
-		defName: name,
-		icon:    icon,
-		defIcon: icon,
-		name:    name,
+		defAttr:  term.Attributes{},
+		attr:     term.Attributes{},
+		defName:  name,
+		icon:     icon,
+		defIcon:  icon,
+		name:     name,
+		progress: -1,
 	}
 	if t.tabs == nil {
 		t.tabs = make([]*tab, 1)
@@ -734,6 +809,64 @@ func (t *Tabs) TabRect(idx int) (offset term.Coordinates, width int, ok bool) {
 	return term.Coordinates{X: x, Y: t.labelRow()}, width, true
 }
 
+// TabShadeRect is TabRect minus the cells SetTabProgress painted, or
+// TabRect itself without progress. It reports false when TabRect does
+// or when the painted part covers the whole rect.
+func (t *Tabs) TabShadeRect(idx int) (offset term.Coordinates, width int, ok bool) {
+	offset, width, ok = t.TabRect(idx)
+	if !ok {
+		return term.Coordinates{}, 0, false
+	}
+	tab := t.tabs[idx]
+	if tab.progress < 0 {
+		return offset, width, true
+	}
+	_, cellW, _ := t.tabBounds(idx)
+	_, nameW, _ := t.labelWidths(tab, cellW)
+	painted := min(paintedCells(tab, nameW), width)
+	if painted >= width {
+		return term.Coordinates{}, 0, false
+	}
+	offset.X += painted
+	return offset, width - painted, true
+}
+
+// labelWidths splits the cells of a tab drawn cellW wide, past its icon
+// and action glyph, between the name and the badge. The badge is
+// dropped when it does not fit on its own.
+func (t *Tabs) labelWidths(tab *tab, cellW int) (iconSkip, nameW, badgeW int) {
+	remaining := cellW
+	if actionW := tabActionWidth(tab); actionW <= remaining {
+		remaining -= actionW
+	}
+	if tab.icon != 0 {
+		iconW := runeCellWidth(tab.icon)
+		if remaining < iconW {
+			return cellW, 0, 0
+		}
+		iconSkip = iconW
+		remaining -= iconW
+		if remaining > 0 {
+			iconSkip++
+			remaining--
+		}
+	}
+	if badgeW = stringCellWidth(tab.badge); badgeW > remaining {
+		badgeW = 0
+	}
+	_, nameW = runesThatFit([]rune(tab.name), remaining-badgeW)
+	return iconSkip, nameW, badgeW
+}
+
+// paintedCells is how many of nameW drawn name cells the tab's progress
+// covers, rounded to the nearest cell.
+func paintedCells(tab *tab, nameW int) int {
+	if tab.progress < 0 {
+		return 0
+	}
+	return (tab.progress*nameW + 50) / 100
+}
+
 // labelRow is the row Draw puts the labels on. They sit in a span that
 // is vertically centred within the rows the frame leaves free, and a
 // span under three rows is not padded. A highlight on top of a
@@ -837,11 +970,29 @@ func (t *Tabs) insertTabCell(pos term.Coordinates, cell tabCellLayout) term.Coor
 	}
 
 	name := []rune(tab.name)
-	nameLen, usedNameWidth := runesThatFit(name, remaining)
+	badgeW := stringCellWidth(tab.badge)
+	if badgeW > remaining {
+		badgeW = 0
+	}
+	nameLen, usedNameWidth := runesThatFit(name, remaining-badgeW)
+	painted := paintedCells(tab, usedNameWidth)
+	paintedAttr := term.AttributesUnion(attr, tab.progressAttr)
+	drawn := 0
 	for _, r := range name[:nameLen] {
-		pos = t.fileListBuf.InsertWithAttr(pos, r, attr)
+		if drawn < painted {
+			pos = t.fileListBuf.InsertWithAttr(pos, r, paintedAttr)
+		} else {
+			pos = t.fileListBuf.InsertWithAttr(pos, r, attr)
+		}
+		drawn += runeCellWidth(r)
 	}
 	remaining -= usedNameWidth
+	if badgeW > 0 {
+		for _, r := range tab.badge {
+			pos = t.fileListBuf.InsertWithAttr(pos, r, tab.badgeAttr)
+		}
+		remaining -= badgeW
+	}
 	for remaining > 0 {
 		pos = t.fileListBuf.Insert(pos, ' ')
 		remaining--
@@ -1072,11 +1223,11 @@ func (t *Tabs) innerWidth() int {
 }
 
 func tabFullWidth(t *tab) int {
+	w := stringCellWidth(t.name) + stringCellWidth(t.badge) + tabActionWidth(t)
 	if t.icon != 0 {
-		return stringCellWidth(t.name) + runeCellWidth(t.icon) + 1 +
-			tabActionWidth(t)
+		w += runeCellWidth(t.icon) + 1
 	}
-	return stringCellWidth(t.name) + tabActionWidth(t)
+	return w
 }
 
 // tabActionWidth is the width the action glyph occupies including the

@@ -61,14 +61,14 @@ type recordingWindowManager struct {
 
 	setContentCalls int
 
-	activityMu  sync.Mutex
-	activity    []tabActivity
-	activityErr error
+	statusMu  sync.Mutex
+	statuses  []tabStatus
+	statusErr error
 }
 
-type tabActivity struct {
-	uri    workspaceapi.URI
-	active bool
+type tabStatus struct {
+	uri   workspaceapi.URI
+	state browserapi.TabState
 }
 
 func (m *recordingWindowManager) Focus() (browserapi.Window, error) { return nil, nil }
@@ -98,17 +98,17 @@ func (m *recordingWindowManager) SetWindowContent(_ browserapi.Window, _ browser
 }
 func (m *recordingWindowManager) CloseWindow(_ browserapi.Window) error { return nil }
 
-func (m *recordingWindowManager) SetTabActivity(uri workspaceapi.URI, active bool) error {
-	m.activityMu.Lock()
-	defer m.activityMu.Unlock()
-	m.activity = append(m.activity, tabActivity{uri: uri, active: active})
-	return m.activityErr
+func (m *recordingWindowManager) SetTabStatus(uri workspaceapi.URI, status browserapi.TabStatus) error {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	m.statuses = append(m.statuses, tabStatus{uri: uri, state: status.State})
+	return m.statusErr
 }
 
-func (m *recordingWindowManager) tabActivity() []tabActivity {
-	m.activityMu.Lock()
-	defer m.activityMu.Unlock()
-	return slices.Clone(m.activity)
+func (m *recordingWindowManager) tabStatuses() []tabStatus {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	return slices.Clone(m.statuses)
 }
 
 // stubNotifications is a no-op browserapi.Notifications. wrapDialogueHandler

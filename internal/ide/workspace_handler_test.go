@@ -74,6 +74,7 @@ import (
 	"unstable.build/rune/internal/ide/idetask"
 	"unstable.build/rune/internal/ide/vctrl/testgit"
 	"unstable.build/rune/internal/localstorage"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte/vtereservoir"
 	"unstable.build/rune/internal/text"
 	"unstable.build/rune/internal/text/textrpc"
@@ -731,7 +732,6 @@ func TestSetTabNameWithAttrIntegration(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, m.addOrCreateWorkspace(uri1))
 	m.quiesce()
-	m.tabAttentionNameSuffix = "*"
 
 	h := newSafeHandler(m)
 	cases := []handlertest.SequenceTestCase{
@@ -775,23 +775,30 @@ func TestSetTabNameWithAttrIntegration(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("bell never rang after injecting BEL into the pty")
 	}
-	// SetTabName routes the attention attribute through
+	// SetTabName routes the bell attribute through
 	// f.parent.scheduleNextTick, which under the default test stub
 	// dispatches on a fresh goroutine. The bell fires from the vte
 	// parser path before that scheduled tick runs, so bellRung above
 	// only proves the bell was rung — it does not guarantee the
-	// attention attr propagated to workspaces[1] yet. Block here
-	// until the bar tab actually reflects the attention attr so the
-	// final render is deterministic.
+	// bell attr propagated to workspaces[1] yet. Block here until the
+	// bar tab actually reflects the bell attr so the final render is
+	// deterministic.
 	require.Eventually(t, func() bool {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		if len(m.workspaces) < 2 || m.workspaces[1] == nil {
 			return false
 		}
-		return m.workspaces[1].attentionAttr != (term.Attributes{})
+		return m.workspaces[1].bellAttr != (term.Attributes{})
 	}, 5*time.Second, 5*time.Millisecond,
-		"workspace attention attr never propagated after bell")
+		"workspace bell attr never propagated after bell")
+	m.mu.Lock()
+	bellAttr := m.workspaces[1].bellAttr
+	barIdx := slices.Index(m.barIdxToSlot, 1)
+	require.GreaterOrEqual(t, barIdx, 0)
+	assert.Equal(t, bellAttr, m.bar.TabAttr(barIdx),
+		"the bar tab of the unfocused workspace carries the bell attr")
+	m.mu.Unlock()
 	cases = []handlertest.SequenceTestCase{
 		{InputSequence: "",
 			Expected: `┌────────────────────────────┐
@@ -801,7 +808,7 @@ func TestSetTabNameWithAttrIntegration(t *testing.T) {
 │     workspaceWallpaper     │
 │                            │
 ├────────────────────────────┤
-│1 1  2 2*                   │
+│1 1  2 2                    │
 └━━━─────────────────────────┘`},
 	}
 	handlertest.RunHandlerSequence(t, h, 30, 9, cases)
@@ -828,6 +835,7 @@ func TestCrossWorkspaceNotifications(t *testing.T) {
 	m.quiesce()
 
 	m.workspaces[0].notifications.Notify(browserapi.LevelError, "sh")
+	m.quiesce()
 
 	h := newSafeHandler(m)
 	cases := []handlertest.SequenceTestCase{
@@ -839,8 +847,8 @@ func TestCrossWorkspaceNotifications(t *testing.T) {
 │     workspaceWallpaper     │
 │                            │
 ├────────────────────────────┤
-│1 #  2 #                    │
-└─────###────────────────────┘`},
+│1 ##  2 #                   │
+└──────###───────────────────┘`},
 	}
 	handlertest.RunHandlerSequenceWriter(t, newWriterForAttrTesting(30, 9),
 		h, 30, 9, cases)
@@ -888,7 +896,7 @@ func TestWorkspaceBarShadesActiveWorkspaces(t *testing.T) {
 	comp := &m.workspaces[slot].ex.comp
 	_, err = comp.Tab(chat, 'x', "rolling-fox", browsertest.NewTestHandler())
 	require.NoError(t, err)
-	require.NoError(t, comp.SetTabActivity(chat, true))
+	require.NoError(t, comp.SetTabStatus(chat, workingStatus()))
 	assert.True(t, m.shadedBar.Running(),
 		"an unfocused workspace's activity shows on the bar")
 	barIdx := slices.Index(m.barIdxToSlot, slot)
@@ -896,7 +904,7 @@ func TestWorkspaceBarShadesActiveWorkspaces(t *testing.T) {
 	assert.Equal(t, []int{barIdx}, m.activeWorkspaceBarIndices())
 
 	require.True(t, comp.OnTabExit(chat))
-	assert.False(t, comp.HasActiveTabs())
+	assert.False(t, comp.HasWorkingTabs())
 	assert.False(t, m.shadedBar.Running(),
 		"closing the active tab stops the effect")
 	assert.Empty(t, m.activeWorkspaceBarIndices())
@@ -905,7 +913,7 @@ func TestWorkspaceBarShadesActiveWorkspaces(t *testing.T) {
 	require.NoError(t, m.Close())
 }
 
-func TestWorkspaceBarNotificationOverridesActivity(t *testing.T) {
+func TestWorkspaceBarNotificationBadge(t *testing.T) {
 	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
 	chat, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
 	require.NoError(t, err)
@@ -914,7 +922,7 @@ func TestWorkspaceBarNotificationOverridesActivity(t *testing.T) {
 	comp := &m.workspaces[slot].ex.comp
 	_, err = comp.Tab(chat, 'x', "rolling-fox", browsertest.NewTestHandler())
 	require.NoError(t, err)
-	require.NoError(t, comp.SetTabActivity(chat, true))
+	require.NoError(t, comp.SetTabStatus(chat, workingStatus()))
 	require.True(t, m.shadedBar.Running())
 	barIdx := slices.Index(m.barIdxToSlot, slot)
 	require.GreaterOrEqual(t, barIdx, 0)
@@ -922,26 +930,574 @@ func TestWorkspaceBarNotificationOverridesActivity(t *testing.T) {
 	uri := m.workspaces[slot].uri
 	m.mu.Unlock()
 
-	m.setWorkspaceRequiresAttention(uri, term.Attributes{Fg: term.ColorYellow})
+	yellow := term.Attributes{Fg: term.ColorYellow}
+	red := term.Attributes{Fg: term.ColorRed}
+	m.addWorkspaceNotification(uri, browserapi.LevelWarn, yellow)
+	m.quiesce()
+	m.addWorkspaceNotification(uri, browserapi.LevelError, red)
+	m.quiesce()
+	m.addWorkspaceNotification(uri, browserapi.LevelInfo, term.Attributes{Fg: term.ColorBlue})
 	m.quiesce()
 
 	m.mu.Lock()
-	require.NotEqual(t, term.Attributes{}, m.workspaces[slot].attentionAttr)
-	assert.Empty(t, m.activeWorkspaceBarIndices(),
-		"a workspace with a pending notification is not shaded")
-	assert.False(t, m.shadedBar.Running(),
-		"the effect stops when every active workspace has a notification")
+	assert.Equal(t, pendingNotifications{3, browserapi.LevelError, red},
+		m.workspaces[slot].notifs)
+	badge, badgeAttr := m.bar.TabBadge(barIdx)
+	assert.Equal(t, "³", badge)
+	assert.Equal(t, term.AttributesUnion(m.barNonFocusAttr, red), badgeAttr,
+		"the badge takes the colour of the highest level pending")
+	assert.Equal(t, []int{barIdx}, m.activeWorkspaceBarIndices(),
+		"notifications no longer stop the working effect")
+	assert.True(t, m.shadedBar.Running())
+	m.mu.Unlock()
 
+	h := newSafeHandler(m)
+	handlertest.RunHandlerSequence(t, h, 30, 9, []handlertest.SequenceTestCase{
+		{InputSequence: "", Expected: `┌────────────────────────────┐
+│                            │
+├────────────────────────────┤
+│                            │
+│     workspaceWallpaper     │
+│                            │
+├────────────────────────────┤
+│1 1³  2 2                   │
+└──────━━━───────────────────┘`},
+	})
+
+	m.mu.Lock()
 	require.True(t, m.switchToWorkspace(slot))
-	assert.Equal(t, term.Attributes{}, m.workspaces[slot].attentionAttr)
-	assert.True(t, m.shadedBar.Running(),
-		"focusing clears the notification and restores the effect")
+	assert.Equal(t, pendingNotifications{}, m.workspaces[slot].notifs)
 	barIdx = slices.Index(m.barIdxToSlot, slot)
 	require.GreaterOrEqual(t, barIdx, 0)
+	badge, _ = m.bar.TabBadge(barIdx)
+	assert.Empty(t, badge, "focusing clears the badge")
+	assert.True(t, m.shadedBar.Running())
 	assert.Contains(t, m.activeWorkspaceBarIndices(), barIdx)
 	m.mu.Unlock()
 
 	require.NoError(t, m.Close())
+}
+
+func TestTabStatusNotifications(t *testing.T) {
+	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	chat, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
+	require.NoError(t, err)
+	seen, err := workspaceapi.ParseURI("rune-agent://model/seen")
+	require.NoError(t, err)
+	notiCfg := notificationsConfig()
+	warn := term.Attributes{Fg: notiCfg.ColorWarning.Fg}
+	const interval = 200 * time.Millisecond
+
+	m.mu.Lock()
+	m.status.notify.interval = interval
+	w := m.workspaces[slot]
+	comp := &w.comp
+	notes := &recordingNotifications{inner: w.notifications}
+	w.notifications = notes
+	for _, tab := range []struct {
+		uri  workspaceapi.URI
+		name string
+	}{{chat, "rolling-fox"}, {seen, "seen"}} {
+		_, err = comp.Tab(tab.uri, 'x', tab.name, browsertest.NewTestHandler())
+		require.NoError(t, err)
+	}
+	chatKey := statusKey{ws: w.uri.String(), uri: chat.String()}
+
+	send := func(tab workspaceapi.URI, reports ...programstatus.Report) {
+		t.Helper()
+		for _, r := range reports {
+			require.NoError(t, comp.SetTabStatus(tab, r))
+		}
+		m.mu.Unlock()
+		m.quiesce()
+		m.mu.Lock()
+	}
+	taken := 0
+	newNotes := func() []capturedNote {
+		all := notes.snapshot()
+		ret := all[taken:]
+		taken = len(all)
+		return ret
+	}
+	note := func(level browserapi.NotificationLevel, msg string) []capturedNote {
+		return []capturedNote{{level: level, msg: msg}}
+	}
+	report := func(state programstatus.State, msg string) programstatus.Report {
+		return programstatus.Report{State: state, Progress: -1, Msg: msg}
+	}
+	waitInterval := func() {
+		m.mu.Unlock()
+		time.Sleep(interval + 50*time.Millisecond)
+		m.quiesce()
+		m.mu.Lock()
+	}
+
+	send(chat, report(programstatus.Working, ""))
+	assert.Empty(t, newNotes(), "working without a message is not notified")
+
+	send(chat, report(programstatus.Working, "Compiling"))
+	assert.Equal(t, note(browserapi.LevelInfo, "rolling-fox: Compiling"), newNotes(),
+		"a message comes through whatever the state")
+
+	send(chat, programstatus.Report{State: programstatus.Working, Progress: 40, Msg: "Linking"})
+	assert.Equal(t, note(browserapi.LevelInfo, "rolling-fox: Linking"), newNotes(),
+		"a new message comes through without a state change")
+
+	send(chat, programstatus.Report{State: programstatus.Working, Progress: 60, Msg: "Linking"})
+	assert.Empty(t, newNotes(), "an unchanged message is not repeated")
+
+	send(chat, programstatus.Report{
+		ID: "tests", State: programstatus.Working, Progress: -1, App: "go", Msg: "ok ./internal",
+	})
+	assert.Equal(t, note(browserapi.LevelInfo, "rolling-fox (go): ok ./internal"), newNotes(),
+		"messages of child records come through")
+
+	send(chat, programstatus.Report{
+		State: programstatus.Blocked, Kind: programstatus.KindPermission,
+		Progress: -1, App: "claude", Msg: "run make test?",
+	})
+	assert.Equal(t, note(browserapi.LevelWarn, "rolling-fox (claude): run make test?"), newNotes(),
+		"the message stands for the transition it comes with")
+	assert.Equal(t, pendingNotifications{4, browserapi.LevelWarn, warn}, w.notifs,
+		"an unfocused workspace counts every notification")
+
+	send(chat, report(programstatus.Done, "ok"), report(programstatus.Error, "boom"))
+	assert.Equal(t, []capturedNote{
+		{level: browserapi.LevelSuccess, msg: "rolling-fox: ok"},
+		{level: browserapi.LevelError, msg: "rolling-fox: boom"},
+	}, newNotes(), "messages are never rate limited")
+
+	// Transitions without a message are coalesced into one deferred
+	// notification carrying the latest state.
+	m.status.lastNotified[chatKey] = time.Now()
+	send(chat, report(programstatus.Done, ""), report(programstatus.Error, ""))
+	assert.Empty(t, newNotes(), "rate limited")
+	m.mu.Unlock()
+	require.Eventually(t, func() bool {
+		m.quiesce()
+		return len(notes.snapshot()) > taken
+	}, 5*time.Second, 5*time.Millisecond)
+	m.mu.Lock()
+	assert.Equal(t, note(browserapi.LevelError, "rolling-fox: error"), newNotes(),
+		"the latest state wins")
+
+	m.status.lastNotified[chatKey] = time.Now()
+	send(chat, report(programstatus.Done, ""), report(programstatus.Done, "shipped"))
+	waitInterval()
+	assert.Equal(t, note(browserapi.LevelSuccess, "rolling-fox: shipped"), newNotes(),
+		"a message for the pending state replaces its deferred notification")
+
+	m.status.lastNotified[chatKey] = time.Now()
+	send(chat, report(programstatus.Error, ""), programstatus.Report{State: programstatus.Clear})
+	waitInterval()
+	assert.Empty(t, newNotes(), "a state gone before its deferred notification is not reported")
+
+	require.True(t, m.switchToWorkspace(slot))
+	win, err := comp.Focus()
+	require.NoError(t, err)
+	idx := slices.IndexFunc(comp.Tabs(), func(tab *browser.Tab) bool {
+		return tab.URI().Equal(seen)
+	})
+	require.True(t, comp.Browser().SetContentToTab(win, idx))
+	focusTab, ok := comp.FocusTab()
+	require.True(t, ok)
+	require.True(t, focusTab.URI().Equal(seen))
+
+	send(seen, report(programstatus.Blocked, ""))
+	assert.Empty(t, newNotes(), "a transition in sight is not notified")
+
+	send(seen, report(programstatus.Blocked, "approve?"))
+	assert.Equal(t, note(browserapi.LevelWarn, "seen: approve?"), newNotes(),
+		"a message comes through in sight")
+
+	delete(m.status.lastNotified, chatKey)
+	send(chat, report(programstatus.Error, ""))
+	assert.Equal(t, note(browserapi.LevelError, "rolling-fox: error"), newNotes(),
+		"another tab of the focused workspace is out of sight")
+	assert.Equal(t, pendingNotifications{}, w.notifs)
+	m.mu.Unlock()
+
+	require.NoError(t, m.Close())
+}
+
+func TestWorkspaceBarStatusRollup(t *testing.T) {
+	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	chat, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
+	require.NoError(t, err)
+	other, err := workspaceapi.ParseURI("rune-agent://model/other")
+	require.NoError(t, err)
+	status := browser.DefaultTabStatusConfig()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// A name long enough to split, on a bar wide enough to show it.
+	const width = 120
+	m.workspaces[slot].tabname = "tinygrad"
+	m.Resize(width, 9)
+	comp := &m.workspaces[slot].ex.comp
+	_, err = comp.Tab(chat, 'x', "rolling-fox", browsertest.NewTestHandler())
+	require.NoError(t, err)
+	_, err = comp.Tab(other, 'x', "other", browsertest.NewTestHandler())
+	require.NoError(t, err)
+	barIdx := slices.Index(m.barIdxToSlot, slot)
+	require.GreaterOrEqual(t, barIdx, 0)
+
+	assert.Equal(t, term.Attributes{}, m.bar.TabAttr(barIdx))
+
+	require.NoError(t, comp.SetTabStatus(chat, workingStatus()))
+	assert.Equal(t, term.Attributes{}, m.bar.TabAttr(barIdx),
+		"working keeps the name attribute")
+	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.WorkingIconAttr),
+		m.bar.TabIconAttr(barIdx))
+	assert.True(t, m.shadedBar.Running())
+	pct, _ := m.bar.TabProgress(barIdx)
+	assert.Equal(t, -1, pct, "indeterminate progress paints nothing")
+	// TabShadeRect needs the layout of a draw.
+	m.bar.Draw(term.NewStringWriter(width, m.barSize()))
+	_, fullWidth, ok := m.bar.TabShadeRect(barIdx)
+	require.True(t, ok)
+
+	halfway := programstatus.Report{State: programstatus.Working, Progress: 50}
+	require.NoError(t, comp.SetTabStatus(chat, halfway))
+	pct, attr := m.bar.TabProgress(barIdx)
+	assert.Equal(t, 50, pct, "the completed part is painted on the bar")
+	assert.Equal(t, status.WorkingDoneAttr, attr)
+	m.bar.Draw(term.NewStringWriter(width, m.barSize()))
+	_, shadedWidth, ok := m.bar.TabShadeRect(barIdx)
+	require.True(t, ok)
+	assert.Less(t, shadedWidth, fullWidth, "the effect runs over the remaining part only")
+	assert.True(t, m.shadedBar.Running())
+
+	done := programstatus.Report{State: programstatus.Done, Progress: -1}
+	require.NoError(t, comp.SetTabStatus(other, done))
+	assert.Equal(t, status.DoneAttr, m.bar.TabAttr(barIdx),
+		"done outranks working")
+	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.DoneIconAttr),
+		m.bar.TabIconAttr(barIdx))
+	assert.False(t, m.shadedBar.Running(), "the effect runs only while working")
+	pct, _ = m.bar.TabProgress(barIdx)
+	assert.Equal(t, -1, pct, "progress goes with the working roll-up")
+
+	blocked := programstatus.Report{State: programstatus.Blocked, Progress: -1}
+	require.NoError(t, comp.SetTabStatus(chat, blocked))
+	assert.Equal(t, status.BlockedAttr, m.bar.TabAttr(barIdx))
+
+	// The bell ranks below the status.
+	m.workspaces[slot].bellAttr = term.Attributes{Attrs: term.AttrBlink}
+	m.decorateWorkspaceBar()
+	assert.Equal(t, status.BlockedAttr, m.bar.TabAttr(barIdx))
+
+	idle := programstatus.Report{State: programstatus.Clear}
+	require.NoError(t, comp.SetTabStatus(chat, idle))
+	require.NoError(t, comp.SetTabStatus(other, idle))
+	assert.Equal(t, term.Attributes{Attrs: term.AttrBlink}, m.bar.TabAttr(barIdx),
+		"the bell shows once the status is idle")
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx))
+
+	reportedIdle := programstatus.Report{State: programstatus.Idle, Progress: -1}
+	require.NoError(t, comp.SetTabStatus(chat, reportedIdle))
+	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.IdleIconAttr),
+		m.bar.TabIconAttr(barIdx), "a program waiting on the user colours the icon")
+	assert.Equal(t, term.Attributes{Attrs: term.AttrBlink}, m.bar.TabAttr(barIdx))
+	assert.False(t, m.shadedBar.Running())
+	require.NoError(t, comp.SetTabStatus(chat, idle))
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx))
+
+	require.True(t, m.switchToWorkspace(slot))
+	barIdx = slices.Index(m.barIdxToSlot, slot)
+	assert.Equal(t, term.Attributes{}, m.bar.TabAttr(barIdx), "focusing clears the bell")
+}
+
+func TestWorkspaceTabInSightOnlyWhileFocused(t *testing.T) {
+	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	chat, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	comp := &m.workspaces[slot].ex.comp
+	tab, err := comp.Tab(chat, 'x', "rolling-fox", browsertest.NewTestHandler())
+	require.NoError(t, err)
+	require.NoError(t, comp.Browser().Focus().SetContent(tab))
+	state := func() programstatus.State {
+		t.Helper()
+		status, ok := comp.Browser().TabStatus(chat)
+		require.True(t, ok)
+		return status.State
+	}
+	done := programstatus.Report{State: programstatus.Done, Progress: -1}
+
+	require.NoError(t, comp.SetTabStatus(chat, done))
+	assert.Equal(t, programstatus.Done, state(), "the tab of a workspace out of focus is not in sight")
+
+	focused := m.focus
+	require.True(t, m.switchToWorkspace(slot))
+	assert.Equal(t, programstatus.Idle, state(), "switching to its workspace sees it")
+
+	require.NoError(t, comp.SetTabStatus(chat, done))
+	assert.Equal(t, programstatus.Idle, state(), "reported in sight")
+
+	require.True(t, m.switchToWorkspace(focused))
+	require.NoError(t, comp.SetTabStatus(chat, done))
+	assert.Equal(t, programstatus.Done, state(), "switching away takes it out of sight")
+}
+
+func TestWorkspaceBarStatusFromTerminalWithoutTab(t *testing.T) {
+	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	pty, err := workspaceapi.ParseURI("file:///dev/ttys042")
+	require.NoError(t, err)
+	status := browser.DefaultTabStatusConfig()
+
+	m.mu.Lock()
+	w := m.workspaces[slot]
+	notes := &recordingNotifications{inner: w.notifications}
+	w.notifications = notes
+	barIdx := slices.Index(m.barIdxToSlot, slot)
+	require.GreaterOrEqual(t, barIdx, 0)
+	publish := func(reports ...programstatus.Report) {
+		t.Helper()
+		// As a vte in a floating window or a task does: its pty is
+		// no tab of the workspace.
+		for _, r := range reports {
+			require.NoError(t, w.ex.tm.SetTabStatus(pty, r))
+		}
+		m.mu.Unlock()
+		m.quiesce()
+		m.mu.Lock()
+	}
+
+	publish(programstatus.Report{State: programstatus.Working, Progress: -1})
+	sum, from := m.workspaceStatus(slot)
+	assert.Equal(t, programstatus.Working, sum.State)
+	assert.Equal(t, pty.String(), from.String())
+	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.WorkingIconAttr),
+		m.bar.TabIconAttr(barIdx))
+	assert.True(t, m.shadedBar.Running())
+
+	publish(programstatus.Report{State: programstatus.Working, Progress: -1, Msg: "Compiling"})
+	publish(programstatus.Report{State: programstatus.Error, Progress: -1, App: "make", Msg: "boom"})
+	assert.Equal(t, status.ErrorAttr, m.bar.TabAttr(barIdx))
+	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.ErrorIconAttr),
+		m.bar.TabIconAttr(barIdx))
+	assert.False(t, m.shadedBar.Running())
+	assert.Equal(t, []capturedNote{
+		{level: browserapi.LevelInfo, msg: "terminal: Compiling"},
+		{level: browserapi.LevelError, msg: "make: boom"},
+	}, notes.snapshot())
+
+	// The program ended, then the terminal closed, withdrawing what it
+	// reported.
+	require.NoError(t, w.ex.tm.EndTabStatus(pty))
+	m.mu.Unlock()
+	m.quiesce()
+	m.mu.Lock()
+	sum, _ = m.workspaceStatus(slot)
+	assert.Equal(t, programstatus.Error, sum.State, "ending keeps the error")
+	require.NoError(t, w.ex.tm.SetTabStatus(pty, programstatus.Report{State: programstatus.Clear}))
+	m.mu.Unlock()
+	m.quiesce()
+	m.mu.Lock()
+	sum, _ = m.workspaceStatus(slot)
+	assert.Equal(t, programstatus.Idle, sum.State)
+	assert.Equal(t, term.Attributes{}, m.bar.TabAttr(barIdx))
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx))
+	assert.Empty(t, m.status.items())
+	m.mu.Unlock()
+
+	require.NoError(t, m.Close())
+}
+
+func TestStatusSources(t *testing.T) {
+	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	t.Cleanup(func() { _ = m.Close() })
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	assert.Empty(t, m.status.items())
+
+	other := m.workspaces[slot].ex
+	focused := m.focusEx()
+	open := func(e *ex, name string) workspaceapi.URI {
+		uri, err := workspaceapi.ParseURI("rune-agent://model/" + name)
+		require.NoError(t, err)
+		_, err = e.comp.Tab(uri, 'x', name, browsertest.NewTestHandler())
+		require.NoError(t, err)
+		return uri
+	}
+	summaryOf := func(r programstatus.Report) programstatus.Summary {
+		s := programstatus.New()
+		s.Apply(r)
+		return s.Summary()
+	}
+	assertSource := func(want, got statusItem) {
+		t.Helper()
+		assert.Truef(t, want.status.Equal(got.status), "want %+v, got %+v", want.status, got.status)
+		want.status, got.status = programstatus.Summary{}, programstatus.Summary{}
+		assert.Equal(t, want, got)
+	}
+	workingReport := programstatus.Report{State: programstatus.Working, Progress: 40, Title: "cargo build"}
+	failedReport := programstatus.Report{State: programstatus.Error, Progress: -1, Msg: "exit status 2"}
+	doneReport := programstatus.Report{State: programstatus.Done, Progress: -1, Msg: "ok"}
+	working := open(focused, "worker")
+	require.NoError(t, focused.comp.SetTabStatus(working, workingReport))
+	failed := open(other, "build")
+	require.NoError(t, other.comp.SetTabStatus(failed, failedReport))
+	silent := open(other, "silent")
+	pty, err := workspaceapi.ParseURI("file:///dev/ttys042")
+	require.NoError(t, err)
+	m.status.setTabStatus(m.workspaces[slot].uri, &other.comp, pty, doneReport)
+
+	otherName := m.makeWorkspaceTabName(slot, m.workspaces[slot])
+	focusedName := m.makeWorkspaceTabName(m.focus, m.workspaces[m.focus])
+	sources := m.status.items()
+	byTab := map[string]statusItem{}
+	for _, s := range sources {
+		byTab[s.uri.String()] = s
+	}
+	require.Len(t, sources, 3, "every reporting source is listed: %+v", sources)
+	assertSource(statusItem{
+		slot: m.focus, ws: m.workspaces[m.focus].uri, wsName: focusedName, uri: working, name: "worker", status: summaryOf(workingReport),
+	}, byTab[working.String()])
+	assertSource(statusItem{
+		slot: slot, ws: m.workspaces[slot].uri, wsName: otherName, uri: failed, name: "build", status: summaryOf(failedReport),
+	}, byTab[failed.String()])
+	assert.NotContains(t, byTab, silent.String(), "a tab that reported nothing is not tracked")
+	assertSource(statusItem{
+		slot: slot, ws: m.workspaces[slot].uri, wsName: otherName, uri: pty, name: detachedStatusLabel, status: summaryOf(doneReport),
+	}, byTab[pty.String()])
+
+	entries := statusInbox{cfg: m.status.cfg}.entries(sources)
+	require.Len(t, entries, 3)
+	require.NoError(t, m.focusStatusEntry(entries[1]))
+	assert.Equal(t, slot, m.focus, "a terminal that is no tab focuses its workspace")
+	silentTab, ok := other.comp.Browser().Tab(silent)
+	require.True(t, ok)
+	require.True(t, other.comp.Browser().RemoveTab(silentTab))
+	assert.Error(t, m.focusStatusEntry(statusEntry{ws: m.workspaces[slot].uri, uri: silent}))
+}
+
+func TestPermissionPromptStatus(t *testing.T) {
+	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	t.Cleanup(func() { _ = m.Close() })
+	status := browser.DefaultTabStatusConfig()
+	prompt, err := workspaceapi.ParseURI("ideauthorizer:///prompt/1")
+	require.NoError(t, err)
+
+	m.mu.Lock()
+	w := m.workspaces[slot]
+	notes := &recordingNotifications{inner: w.notifications}
+	w.notifications = notes
+	barIdx := slices.Index(m.barIdxToSlot, slot)
+	require.GreaterOrEqual(t, barIdx, 0)
+	m.status.notify.messages = true
+	reporter := w.ex.tm
+
+	// As ideauthorizer announces a pending prompt.
+	require.NoError(t, reporter.SetTabStatus(prompt, programstatus.Report{
+		State: programstatus.Blocked, Kind: programstatus.KindPermission, Progress: -1,
+		App: "rune", Title: "Authorization", Msg: "ext wants to run make",
+	}))
+	m.mu.Unlock()
+	m.quiesce()
+	m.mu.Lock()
+	sum, from := m.workspaceStatus(slot)
+	assert.Equal(t, programstatus.Blocked, sum.State)
+	assert.Equal(t, prompt.String(), from.String())
+	assert.Equal(t, status.BlockedAttr, m.bar.TabAttr(barIdx))
+	assert.Equal(t, []capturedNote{{level: browserapi.LevelWarn, msg: "rune: ext wants to run make"}},
+		notes.snapshot())
+	entries := statusInbox{cfg: m.status.cfg}.entries(m.status.items())
+	require.Len(t, entries, 1)
+	assert.Equal(t, prompt.String(), entries[0].uri.String(), "the prompt is listed in the inbox")
+
+	// And withdraws it once answered.
+	require.NoError(t, reporter.SetTabStatus(prompt, programstatus.Report{State: programstatus.Clear}))
+	m.mu.Unlock()
+	m.quiesce()
+	m.mu.Lock()
+	sum, _ = m.workspaceStatus(slot)
+	assert.Equal(t, programstatus.Idle, sum.State)
+	assert.Equal(t, term.Attributes{}, m.bar.TabAttr(barIdx))
+	assert.Empty(t, m.status.items())
+	m.mu.Unlock()
+}
+
+func TestWorkspaceTabManagerDropsClosedWorkspaceStatus(t *testing.T) {
+	for _, end := range []bool{false, true} {
+		t.Run(fmt.Sprintf("end=%t", end), func(t *testing.T) {
+			m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+			t.Cleanup(func() { _ = m.Close() })
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			w := m.workspaces[slot]
+			uri, err := workspaceapi.ParseURI("file:///dev/closed-status")
+			require.NoError(t, err)
+			var queued func()
+			tm := &workspaceTabManager{workspace: w, parent: m.workspaceManagerHandler, tm: &w.comp}
+			schedule := m.scheduleNextTick
+			m.scheduleNextTick = func(fn func()) bool { queued = fn; return true }
+			if end {
+				require.NoError(t, tm.EndTabStatus(uri))
+			} else {
+				require.NoError(t, tm.SetTabStatus(uri, workingStatus()))
+			}
+			m.scheduleNextTick = schedule
+			require.NotNil(t, queued)
+			m.workspaces[slot] = &workspaceHandler{uri: w.uri}
+			queued()
+			m.workspaces[slot] = w
+			_, ok := m.status.status(w.uri, uri)
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestCommandStatusListFocusesEntry(t *testing.T) {
+	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	t.Cleanup(func() { _ = m.Close() })
+	blocked, err := workspaceapi.ParseURI("rune-agent://model/agent")
+	require.NoError(t, err)
+
+	var other *ex
+	func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		other = m.workspaces[slot].ex
+		_, err = other.comp.Tab(blocked, 'x', "agent", browsertest.NewTestHandler())
+		require.NoError(t, err)
+		require.NoError(t, other.comp.SetTabStatus(blocked, programstatus.Report{
+			State: programstatus.Blocked, Progress: -1, Msg: "needs you",
+		}))
+		focused := m.focusEx()
+		require.NoError(t, m.commandStatusList())
+		require.Equal(t, 1, focused.comp.Browser().FloatingWindows())
+		win, err := focused.comp.Focus()
+		require.NoError(t, err)
+		content, err := win.Content()
+		require.NoError(t, err)
+		picker, ok := content.(*statusView)
+		require.True(t, ok)
+		require.Len(t, picker.entries, 1)
+
+		oldFocus := m.focus
+		require.NoError(t, m.moveWorkspace(strconv.Itoa(slot+1)))
+		slot = oldFocus
+		exit, handled := picker.Handle(term.Event{Type: term.EventKey, Key: term.KeyEnter})
+		assert.True(t, exit)
+		assert.True(t, handled)
+	}()
+	m.quiesce()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	assert.Equal(t, slot, m.focus, "the entry's workspace is focused")
+	tab, ok := other.comp.FocusTab()
+	require.True(t, ok)
+	assert.True(t, tab.URI().Equal(blocked), "the entry's tab is shown")
+	assert.NotEqual(t, -1, slices.IndexFunc(other.comp.Browser().Tabs(),
+		func(t *browser.Tab) bool { return t.URI().Equal(blocked) }))
+
+	assert.Error(t, m.commandStatusList("extra"))
 }
 
 func TestWorkspaceBarActiveTabAnimationConfig(t *testing.T) {
@@ -973,8 +1529,8 @@ func TestWorkspaceBarActiveTabAnimationConfig(t *testing.T) {
 			comp := &m.workspaces[slot].ex.comp
 			_, err = comp.Tab(chat, 'x', "rolling-fox", browsertest.NewTestHandler())
 			require.NoError(t, err)
-			require.NoError(t, comp.SetTabActivity(chat, true))
-			assert.True(t, comp.HasActiveTabs())
+			require.NoError(t, comp.SetTabStatus(chat, workingStatus()))
+			assert.True(t, comp.HasWorkingTabs())
 			assert.Equal(t, tc.running, m.shadedBar.Running())
 			m.mu.Unlock()
 
@@ -9539,4 +10095,8 @@ func TestCommandBindingOptsEditorKeyBindings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func workingStatus() programstatus.Report {
+	return programstatus.Report{State: programstatus.Working, Progress: -1}
 }

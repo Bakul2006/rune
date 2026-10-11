@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/llmapi"
 	"unstable.build/rune/cmd/rune-agent/agent"
 	"unstable.build/rune/cmd/rune-agent/agent/skills"
@@ -144,7 +145,7 @@ func TestBeginTurnKeepsContextOccupancy(t *testing.T) {
 	assert.Equal(t, start, got.TurnStart)
 }
 
-func TestTurnMarksChatTabActivity(t *testing.T) {
+func TestTurnReportsChatTabStatus(t *testing.T) {
 	wm := &recordingWindowManager{}
 	s := newStatusBarSyncComponent()
 	t.Cleanup(func() { _ = s.comp.Close() })
@@ -154,15 +155,15 @@ func TestTurnMarksChatTabActivity(t *testing.T) {
 	s.uri = uri
 
 	s.beginTurn(time.Now())
-	assert.Equal(t, []tabActivity{{uri: uri, active: true}}, wm.tabActivity())
+	assert.Equal(t, []tabStatus{{uri: uri, state: browserapi.TabWorking}}, wm.tabStatuses())
 	s.endTurn()
-	assert.Equal(t, []tabActivity{
-		{uri: uri, active: true}, {uri: uri, active: false},
-	}, wm.tabActivity())
+	assert.Equal(t, []tabStatus{
+		{uri: uri, state: browserapi.TabWorking}, {uri: uri, state: browserapi.TabIdle},
+	}, wm.tabStatuses())
 }
 
-func TestTurnSurvivesTabActivityErrors(t *testing.T) {
-	wm := &recordingWindowManager{activityErr: errors.New("unknown tab")}
+func TestTurnSurvivesTabStatusErrors(t *testing.T) {
+	wm := &recordingWindowManager{statusErr: errors.New("unknown tab")}
 	s := newStatusBarSyncComponent()
 	t.Cleanup(func() { _ = s.comp.Close() })
 	s.h.wm = wm
@@ -174,10 +175,10 @@ func TestTurnSurvivesTabActivityErrors(t *testing.T) {
 	assert.True(t, s.comp.StatusBarState().Active)
 	s.endTurn()
 	assert.False(t, s.comp.StatusBarState().Active)
-	assert.Len(t, wm.tabActivity(), 2)
+	assert.Len(t, wm.tabStatuses(), 2)
 }
 
-func TestTurnWithoutTabSkipsActivity(t *testing.T) {
+func TestTurnWithoutTabSkipsStatus(t *testing.T) {
 	wm := &recordingWindowManager{}
 	s := newStatusBarSyncComponent()
 	t.Cleanup(func() { _ = s.comp.Close() })
@@ -185,7 +186,7 @@ func TestTurnWithoutTabSkipsActivity(t *testing.T) {
 
 	s.beginTurn(time.Now())
 	s.endTurn()
-	assert.Empty(t, wm.tabActivity())
+	assert.Empty(t, wm.tabStatuses())
 }
 
 func TestSyncStatusBarModelResolvesProviderDefaultEffort(t *testing.T) {

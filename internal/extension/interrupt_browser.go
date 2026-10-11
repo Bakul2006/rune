@@ -131,11 +131,11 @@ func (s *interruptBrowser) CloseWindow(
 	return res, err
 }
 
-// SetTabActivity satisfies browserrpc.BrowserServer
-func (s *interruptBrowser) SetTabActivity(
-	ctx context.Context, req *browserrpc.SetTabActivityRequest,
-) (*browserrpc.SetTabActivityResponse, error) {
-	res, err := s.browserServer.SetTabActivity(ctx, req)
+// SetTabStatus satisfies browserrpc.BrowserServer
+func (s *interruptBrowser) SetTabStatus(
+	ctx context.Context, req *browserrpc.SetTabStatusRequest,
+) (*browserrpc.SetTabStatusResponse, error) {
+	res, err := s.browserServer.SetTabStatus(ctx, req)
 	s.interruptDraw()
 	return res, err
 }

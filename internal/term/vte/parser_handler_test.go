@@ -37,6 +37,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/clipboard"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/component"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte/vteparser"
 	"unstable.build/rune/internal/term/vte/vtescreen"
 	"unstable.build/rune/internal/workspace/workspacetest"
@@ -834,10 +835,18 @@ func assertWriteToPty(t *testing.T, pty *workspacetest.File, data string) {
 }
 
 type mockTabManager struct {
-	belled  bool
-	toUri   workspaceapi.URI
-	setName string
-	setAttr term.Attributes
+	belled   bool
+	toUri    workspaceapi.URI
+	setName  string
+	setAttr  term.Attributes
+	statuses []statusCall
+}
+
+// statusCall is a SetTabStatus call, or an EndTabStatus one when end is
+// set.
+type statusCall struct {
+	report programstatus.Report
+	end    bool
 }
 
 func (tm *mockTabManager) Tab(
@@ -859,7 +868,17 @@ func (tm *mockTabManager) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (tm *mockTabManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (tm *mockTabManager) SetTabStatus(uri workspaceapi.URI, report programstatus.Report) error {
+	tm.toUri = uri
+	tm.statuses = append(tm.statuses, statusCall{report: report})
+	return nil
+}
+
+func (tm *mockTabManager) EndTabStatus(uri workspaceapi.URI) error {
+	tm.toUri = uri
+	tm.statuses = append(tm.statuses, statusCall{end: true})
+	return nil
+}
 
 func (tm *mockTabManager) bell() {
 	tm.belled = true
@@ -909,6 +928,122 @@ func TestBellFocusChangeRace(t *testing.T) {
 		ph.sync.mu.Unlock()
 	}
 	<-done
+}
+
+func TestProgramStatus(t *testing.T) {
+	t.Parallel()
+	const st = "\x1b\\"
+	working := programstatus.Report{State: programstatus.Working, Progress: -1, App: "brew", Msg: "Installing"}
+	done := programstatus.Report{State: programstatus.Done, Progress: -1, App: "brew", Msg: "Upgraded"}
+	blocked := programstatus.Report{ID: "eu", State: programstatus.Blocked, Kind: programstatus.KindAuth, Progress: -1}
+	clearAll := programstatus.Report{State: programstatus.Clear}
+	end := statusCall{end: true}
+	cases := []struct {
+		name    string
+		run     func(ph *parserHandler)
+		want    []statusCall
+		wantPty string
+	}{
+		{
+			name: "every report is forwarded",
+			run: func(ph *parserHandler) {
+				ph.ProgramStatus(working)
+				ph.ProgramStatus(working)
+				ph.ProgramStatus(blocked)
+				ph.ProgramStatus(done)
+			},
+			want: []statusCall{{report: working}, {report: working}, {report: blocked}, {report: done}},
+		},
+		{
+			name:    "query is echoed with ST",
+			run:     func(ph *parserHandler) { ph.ProgramStatusQuery(st) },
+			wantPty: "\x1b]7501;?" + st,
+		},
+		{
+			name:    "query is echoed with BEL",
+			run:     func(ph *parserHandler) { ph.ProgramStatusQuery("\x07") },
+			wantPty: "\x1b]7501;?\x07",
+		},
+		{
+			name: "prompt ends what was reported",
+			run: func(ph *parserHandler) {
+				ph.ProgramStatus(done)
+				ph.ProgramStatus(blocked)
+				ph.PromptStart()
+			},
+			want: []statusCall{{report: done}, {report: blocked}, end},
+		},
+		{
+			name: "prompt without a report tells nothing",
+			run:  func(ph *parserHandler) { ph.PromptStart() },
+		},
+		{
+			name: "prompt after clearing everything tells nothing",
+			run: func(ph *parserHandler) {
+				ph.ProgramStatus(working)
+				ph.ProgramStatus(clearAll)
+				ph.PromptStart()
+			},
+			want: []statusCall{{report: working}, {report: clearAll}},
+		},
+		{
+			name: "prompt after clearing a child ends the rest",
+			run: func(ph *parserHandler) {
+				ph.ProgramStatus(working)
+				ph.ProgramStatus(programstatus.Report{ID: "eu", State: programstatus.Clear})
+				ph.PromptStart()
+			},
+			want: []statusCall{
+				{report: working},
+				{report: programstatus.Report{ID: "eu", State: programstatus.Clear}},
+				end,
+			},
+		},
+		{
+			name: "process exit ends what was reported",
+			run: func(ph *parserHandler) {
+				ph.ProgramStatus(working)
+				ph.sync.mu.Lock()
+				ph.endStatus()
+				ph.sync.mu.Unlock()
+			},
+			want: []statusCall{{report: working}, end},
+		},
+		{
+			name: "reset clears what was reported",
+			run: func(ph *parserHandler) {
+				ph.ProgramStatus(done)
+				ph.ResetState()
+				ph.ResetState()
+			},
+			want: []statusCall{{report: done}, {report: clearAll}},
+		},
+		{
+			name: "reports after a reset are forwarded",
+			run: func(ph *parserHandler) {
+				ph.ResetState()
+				ph.ProgramStatus(done)
+			},
+			want: []statusCall{{report: done}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ph, pty := newInputParserHandlerPty(t, false)
+			tm := ph.tm.(*mockTabManager)
+			tc.run(ph)
+			assert.Equal(t, tc.want, tm.statuses)
+			if tc.want != nil {
+				assert.Equal(t, ph.uri, tm.toUri)
+			}
+			if tc.wantPty != "" {
+				assertWriteToPty(t, pty, tc.wantPty)
+			} else {
+				assert.Empty(t, pty.Writes)
+			}
+		})
+	}
 }
 
 func TestBellReleasesLockBeforeInvokingCallback(t *testing.T) {

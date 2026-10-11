@@ -25,6 +25,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/unstablebuild/blue/logging"
 	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // C0 set of 7-bit control characters (from ANSI X3.4-1977).
@@ -289,9 +290,43 @@ func (p *driver) OSCDispatch(params [][]byte, bellTerminated bool) {
 
 	case "104", "110", "111", "112":
 	/* unsupported color CSI dispatch */
+	case "133":
+		if len(params) >= 2 && len(params[1]) > 0 && params[1][0] == 'A' {
+			p.handler.PromptStart()
+		}
+	case "7501":
+		p.programStatusDispatch(params, terminator)
 	default:
 		p.logUnhandledOSC(params)
 	}
+}
+
+// programStatusDispatch handles OSC 7501: a query is answered through
+// the handler and a report is parsed and handed to it. A sequence with
+// any number of body parameters other than one, longer than
+// programstatus.MaxSequence with its introducer and terminator, or
+// whose report does not parse is dropped.
+func (p *driver) programStatusDispatch(params [][]byte, terminator string) {
+	if len(params) != 2 {
+		p.logUnhandledOSC(params)
+		return
+	}
+	body := params[1]
+	if len(body)+len("\x1b]7501;")+len(terminator) > programstatus.MaxSequence {
+		p.log(log.DebugLevel, "dropping oversized OSC 7501 report len=%d", len(body))
+		return
+	}
+	if string(bytes.TrimSpace(body)) == "?" {
+		p.handler.ProgramStatusQuery(terminator)
+		return
+	}
+	report, err := programstatus.Parse(body)
+	if err != nil {
+		p.log(log.DebugLevel, "dropping OSC 7501 report: %v", err)
+		p.logUnhandledOSC(params)
+		return
+	}
+	p.handler.ProgramStatus(report)
 }
 
 func (p *driver) CSIDispatch(

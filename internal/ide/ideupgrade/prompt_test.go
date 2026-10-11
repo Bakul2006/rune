@@ -56,7 +56,7 @@ func (m *mockWindowManager) SetWindowContent(_ browserapi.Window, _ browserapi.H
 }
 func (m *mockWindowManager) CloseWindow(_ browserapi.Window) error { return nil }
 
-func (m *mockWindowManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *mockWindowManager) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 func newPromptTestManager(t *testing.T, feed func(browserapi.Floating)) *Manager {
 	t.Helper()

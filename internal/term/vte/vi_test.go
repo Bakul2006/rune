@@ -35,6 +35,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/cell"
 	"unstable.build/rune/internal/component"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte/vtescreen"
 	"unstable.build/rune/internal/term/vte/vtetest"
 	"unstable.build/rune/internal/text"
@@ -1996,4 +1997,5 @@ func (nopTabManager) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (nopTabManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (nopTabManager) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (nopTabManager) EndTabStatus(workspaceapi.URI) error                       { return nil }

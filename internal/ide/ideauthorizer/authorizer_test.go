@@ -27,7 +27,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	blueauth "github.com/unstablebuild/blue/auth"
-	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/extensionapi"
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi"
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi/storagestub"
@@ -95,49 +94,6 @@ func syncScheduleNextTick(fn func()) bool {
 	return true
 }
 
-// capturingNotifications is a test double for browserapi.Notifications
-// that records each emitted notification so tests can assert that a
-// warning notification was delivered.
-type capturingNotifications struct {
-	mu            sync.Mutex
-	notifications []capturedNotification
-}
-
-type capturedNotification struct {
-	Level browserapi.NotificationLevel
-	Msg   string
-}
-
-func (n *capturingNotifications) Notify(
-	level browserapi.NotificationLevel, msg string, args ...any,
-) (string, error) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.notifications = append(n.notifications, capturedNotification{
-		Level: level,
-		Msg:   fmt.Sprintf(msg, args...),
-	})
-	return "", nil
-}
-
-func (n *capturingNotifications) NotifyOnce(
-	level browserapi.NotificationLevel, msg string, args ...any,
-) (string, error) {
-	return n.Notify(level, msg, args...)
-}
-
-func (n *capturingNotifications) UpdateNotificationProgress(
-	string, string, int64, int64,
-) error {
-	return nil
-}
-
-func (n *capturingNotifications) captured() []capturedNotification {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return append([]capturedNotification(nil), n.notifications...)
-}
-
 type errorStorage struct {
 	storageapi.Service
 	getErr error
@@ -162,9 +118,9 @@ func TestAuthorizerRegularExtensionPromptsForClaimedPermission(t *testing.T) {
 	t.Parallel()
 
 	opener := &stubPromptOpener{decision: PermissionAllowOnce}
-	noti := &capturingNotifications{}
-	a := mustNewAuthorizerWithNotifications(t, opener,
-		storagestub.NewInMemoryService(), texttest.NopEditor(), noti)
+	status := &capturingStatus{}
+	a := mustNewAuthorizerWithStatus(t, opener,
+		storagestub.NewInMemoryService(), texttest.NopEditor(), status)
 	ext := testRegularExtension(extensionapi.NewPermissions(
 		extensionapi.PermissionBrowserWindowManager,
 	))
@@ -180,21 +136,20 @@ func TestAuthorizerRegularExtensionPromptsForClaimedPermission(t *testing.T) {
 	assert.Contains(t, opener.messages[0],
 		PermissionActionText(extensionapi.PermissionBrowserWindowManager))
 
-	// Creating the prompt emits a single warning notification with the
-	// relevant scope so the workspace tab can be highlighted for attention.
-	captured := noti.captured()
-	require.Len(t, captured, 1)
-	assert.Equal(t, browserapi.LevelWarn, captured[0].Level)
-	assert.Contains(t, captured[0].Msg, "authorization")
-	assert.Contains(t, captured[0].Msg, "Test Extension")
+	// The prompt is reported as a blocked status with the relevant scope
+	// so the workspace shows it needs the user.
+	blocked := status.blocked()
+	require.Len(t, blocked, 1)
+	assert.Contains(t, blocked[0].Msg, "authorization")
+	assert.Contains(t, blocked[0].Msg, "Test Extension")
 
 	err = a.Authorize(context.Background(), blueauth.UserClaims[Extension]{Extra: ext},
 		testWindowManagerResource)
 	require.NoError(t, err)
 	assert.Equal(t, 1, opener.calls)
 	// The cached once-decision prevents a second prompt and thus a
-	// second warning notification.
-	assert.Len(t, noti.captured(), 1)
+	// second blocked status.
+	assert.Len(t, status.blocked(), 1)
 }
 
 func TestAuthorizerRegularExtensionMissingClaimForbiddenWithoutPrompt(t *testing.T) {
@@ -227,7 +182,7 @@ func mustNewAutoAuthorizer(
 	storage storageapi.Service, editor text.Editor,
 ) *Authorizer {
 	t.Helper()
-	a, err := NewAuthorizer(editor, opener, storage, syncScheduleNextTick, nil,
+	a, err := NewAuthorizer(editor, opener, storage, syncScheduleNextTick, &capturingStatus{},
 		testTrustStore(t), Config{
 			AutoAuthorizeExtensions: true,
 			AutoAuthorizeCommands:   true,
@@ -262,7 +217,7 @@ func TestAuthorizerAutoAuthorizeScopes(t *testing.T) {
 
 			opener := &stubPromptOpener{decision: PermissionAllowOnce}
 			a, err := NewAuthorizer(texttest.NopEditor(), opener,
-				storagestub.NewInMemoryService(), syncScheduleNextTick, nil,
+				storagestub.NewInMemoryService(), syncScheduleNextTick, &capturingStatus{},
 				testTrustStore(t), tc.config)
 			require.NoError(t, err)
 			ext := testPluginExtension(nil)
@@ -334,7 +289,7 @@ func TestAuthorizerAutoAuthorizeStartCommandGrantsWithoutPrompt(t *testing.T) {
 	// auto-authorization is also enabled.
 	trustedFingerprint := "D3F9E65DE72888CC03D45CF5064D4ABCFA6D9338"
 	a, err := NewAuthorizer(texttest.NopEditor(), opener, storage,
-		syncScheduleNextTick, nil, testTrustStore(t), Config{
+		syncScheduleNextTick, &capturingStatus{}, testTrustStore(t), Config{
 			AutoAuthorizeCommands:          true,
 			AutoAuthorizeVerifiedPublisher: true,
 		})
@@ -394,7 +349,7 @@ func TestAuthorizerVerifiedPublisherAutoAuthorizes(t *testing.T) {
 	ext.VerifiedPublisher = trustedFingerprint
 	opener := &stubPromptOpener{decision: PermissionDenyOnce}
 	a, err := NewAuthorizer(texttest.NopEditor(), opener,
-		storagestub.NewInMemoryService(), syncScheduleNextTick, nil,
+		storagestub.NewInMemoryService(), syncScheduleNextTick, &capturingStatus{},
 		testTrustStore(t), Config{
 			AutoAuthorizeVerifiedPublisher: true,
 			AutoAuthorizeCommands:          true,
@@ -418,7 +373,7 @@ func TestAuthorizerVerifiedPublisherAloneStillPromptsCommands(t *testing.T) {
 	ext.VerifiedPublisher = trustedFingerprint
 	opener := &stubPromptOpener{decision: PermissionAllowOnce}
 	a, err := NewAuthorizer(texttest.NopEditor(), opener,
-		storagestub.NewInMemoryService(), syncScheduleNextTick, nil,
+		storagestub.NewInMemoryService(), syncScheduleNextTick, &capturingStatus{},
 		testTrustStore(t), Config{
 			AutoAuthorizeVerifiedPublisher: true,
 		})
@@ -459,7 +414,7 @@ func TestAuthorizerOnboardingCommandAutoAuthorize(t *testing.T) {
 			storage := storagestub.NewInMemoryService()
 			opener := &stubPromptOpener{decision: PermissionAllowOnce}
 			a, err := NewAuthorizer(texttest.NopEditor(), opener, storage,
-				syncScheduleNextTick, nil, testTrustStore(t), Config{
+				syncScheduleNextTick, &capturingStatus{}, testTrustStore(t), Config{
 					AutoAuthorizeVerifiedPublisher: true,
 					OnboardingActive:               func() bool { return tc.onboarding },
 				})
@@ -504,7 +459,7 @@ func TestAuthorizerVerifiedPublisherToggleAndStoredDeny(t *testing.T) {
 
 	opener := &stubPromptOpener{decision: PermissionAllowOnce}
 	a, err := NewAuthorizer(texttest.NopEditor(), opener, storage,
-		syncScheduleNextTick, nil, testTrustStore(t),
+		syncScheduleNextTick, &capturingStatus{}, testTrustStore(t),
 		Config{AutoAuthorizeVerifiedPublisher: true})
 	require.NoError(t, err)
 	assert.ErrorIs(t, a.Authorize(context.Background(), blueauth.UserClaims[Extension]{Extra: ext},
@@ -513,7 +468,7 @@ func TestAuthorizerVerifiedPublisherToggleAndStoredDeny(t *testing.T) {
 
 	noToggleOpener := &stubPromptOpener{decision: PermissionAllowOnce}
 	withoutToggle, err := NewAuthorizer(texttest.NopEditor(), noToggleOpener,
-		storagestub.NewInMemoryService(), syncScheduleNextTick, nil,
+		storagestub.NewInMemoryService(), syncScheduleNextTick, &capturingStatus{},
 		testTrustStore(t), Config{})
 	require.NoError(t, err)
 	require.NoError(t, withoutToggle.Authorize(context.Background(),
@@ -527,9 +482,9 @@ func TestAuthorizerPluginPromptsAndIgnoresClaimsPermissions(t *testing.T) {
 	opener := &stubPromptOpener{
 		decision: PermissionAllowOnce,
 	}
-	noti := &capturingNotifications{}
-	a := mustNewAuthorizerWithNotifications(t, opener,
-		storagestub.NewInMemoryService(), texttest.NopEditor(), noti)
+	status := &capturingStatus{}
+	a := mustNewAuthorizerWithStatus(t, opener,
+		storagestub.NewInMemoryService(), texttest.NopEditor(), status)
 	ext := testPluginExtension(extensionapi.NewPermissions(extensionapi.PermissionStorage))
 
 	err := a.Authorize(context.Background(), blueauth.UserClaims[Extension]{Extra: ext},
@@ -545,12 +500,10 @@ func TestAuthorizerPluginPromptsAndIgnoresClaimsPermissions(t *testing.T) {
 		PermissionActionText(extensionapi.PermissionBrowserWindowManager))
 	assert.Equal(t, []string{"--flag"}, ext.Args)
 
-	// Creating the prompt emits a single warning notification.
-	captured := noti.captured()
-	require.Len(t, captured, 1)
-	assert.Equal(t, browserapi.LevelWarn, captured[0].Level)
-	assert.Contains(t, captured[0].Msg, "authorization")
-	assert.Contains(t, captured[0].Msg, "/bin/test")
+	blocked := status.blocked()
+	require.Len(t, blocked, 1)
+	assert.Contains(t, blocked[0].Msg, "authorization")
+	assert.Contains(t, blocked[0].Msg, "/bin/test")
 }
 
 func TestAuthorizerPluginUsesPeerProcessForPromptAndStorageKey(t *testing.T) {
@@ -1389,22 +1342,19 @@ func mustNewAuthorizer(
 	storage storageapi.Service, editor text.Editor,
 ) *Authorizer {
 	t.Helper()
-	a, err := NewAuthorizer(editor, opener, storage, syncScheduleNextTick, nil,
+	a, err := NewAuthorizer(editor, opener, storage, syncScheduleNextTick, &capturingStatus{},
 		testTrustStore(t), Config{})
 	require.NoError(t, err)
 	return a
 }
 
-// mustNewAuthorizerWithNotifications is like mustNewAuthorizer but wires
-// a capturing notifications double so tests can assert that prompt
-// creation also emits a warning notification.
-func mustNewAuthorizerWithNotifications(
+func mustNewAuthorizerWithStatus(
 	t *testing.T, opener PromptOpener,
 	storage storageapi.Service, editor text.Editor,
-	noti browserapi.Notifications,
+	status *capturingStatus,
 ) *Authorizer {
 	t.Helper()
-	a, err := NewAuthorizer(editor, opener, storage, syncScheduleNextTick, noti,
+	a, err := NewAuthorizer(editor, opener, storage, syncScheduleNextTick, status,
 		testTrustStore(t), Config{})
 	require.NoError(t, err)
 	return a
@@ -1421,24 +1371,7 @@ func newTestAuthorizerCore(
 	opener PromptOpener, storage storageapi.Service,
 ) *Authorizer {
 	a := &Authorizer{
-		prompter: newPermissionPrompter(opener, syncScheduleNextTick, nil),
-		storage:  storage,
-		trust:    pkgtrust.NewStore("", nil),
-		once:     make(map[string]pluginPermissionOnceDecision),
-		pending:  make(map[string]*pendingPrompt),
-	}
-	return a
-}
-
-// newTestAuthorizerCoreWithNotifications is like newTestAuthorizerCore but
-// wires a capturing notifications double so tests can assert that prompt
-// creation also emits a warning notification.
-func newTestAuthorizerCoreWithNotifications(
-	opener PromptOpener, storage storageapi.Service,
-	noti browserapi.Notifications,
-) *Authorizer {
-	a := &Authorizer{
-		prompter: newPermissionPrompter(opener, syncScheduleNextTick, noti),
+		prompter: newPermissionPrompter(opener, syncScheduleNextTick, &capturingStatus{}),
 		storage:  storage,
 		trust:    pkgtrust.NewStore("", nil),
 		once:     make(map[string]pluginPermissionOnceDecision),
@@ -1568,12 +1501,12 @@ func TestAuthorizerAuthorizeOpaqueScriptPromptsForExactApproval(t *testing.T) {
 	const width, height = 120, 40
 	comp := browser.NewComponent(browser.DefaultConfig())
 	ticks := make(chan func())
-	noti := &capturingNotifications{}
+	status := &capturingStatus{}
 	a := newTestAuthorizerCore(comp, storagestub.NewInMemoryService())
 	a.prompter = newPermissionPrompter(comp, func(fn func()) bool {
 		ticks <- fn
 		return true
-	}, noti)
+	}, status)
 	ctx := blueauth.ContextWithClaims(context.Background(), blueauth.UserClaims[Extension]{
 		Extra: testRegularExtension(extensionapi.NewPermissions(extensionapi.PermissionExecute)),
 	})
@@ -1591,6 +1524,21 @@ func TestAuthorizerAuthorizeOpaqueScriptPromptsForExactApproval(t *testing.T) {
 			fn()
 		case <-time.After(5 * time.Second):
 			t.Fatal("timed out waiting for the prompt")
+		}
+	}
+	awaitAuthorization := func(done <-chan error) error {
+		t.Helper()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case fn := <-ticks:
+				fn()
+			case err := <-done:
+				return err
+			case <-timer.C:
+				t.Fatal("timed out waiting for authorization")
+			}
 		}
 	}
 	cmd := workspaceapi.Cmd{
@@ -1686,11 +1634,10 @@ func TestAuthorizerAuthorizeOpaqueScriptPromptsForExactApproval(t *testing.T) {
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘`[1:]},
 		{InputSequence: "A", Expected: closed},
 	})
-	require.NoError(t, <-done)
-	assert.Equal(t, []capturedNotification{{
-		Level: browserapi.LevelWarn,
-		Msg:   "User authorization required for bash",
-	}}, noti.captured())
+	require.NoError(t, awaitAuthorization(done))
+	blocked := status.blocked()
+	require.Len(t, blocked, 1)
+	assert.Equal(t, "User authorization required for bash", blocked[0].Msg)
 
 	select {
 	case err := <-authorize(cmd):
@@ -1705,7 +1652,7 @@ func TestAuthorizerAuthorizeOpaqueScriptPromptsForExactApproval(t *testing.T) {
 	handlertest.RunHandlerSequence(t, comp, width, height, []handlertest.SequenceTestCase{
 		{InputSequence: "N", Expected: closed},
 	})
-	require.ErrorIs(t, <-done, blueauth.ErrForbidden)
+	require.ErrorIs(t, awaitAuthorization(done), blueauth.ErrForbidden)
 }
 
 func TestAuthorizerAuthorizeStartCommandRegularExtensionRequiresExecute(t *testing.T) {

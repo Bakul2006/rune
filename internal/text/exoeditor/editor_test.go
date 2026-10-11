@@ -29,6 +29,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/browser"
 	"unstable.build/rune/internal/cell"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/workspace"
 	"unstable.build/rune/internal/workspace/workspacetest"
@@ -130,7 +131,8 @@ func (stubTabManager) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (stubTabManager) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (stubTabManager) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (stubTabManager) EndTabStatus(workspaceapi.URI) error                       { return nil }
 
 // stubReloader satisfies exoeditor.Reloader for tests that only need a
 // non-nil value to satisfy exoeditor.New's invariants.

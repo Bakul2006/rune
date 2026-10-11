@@ -34,7 +34,6 @@ import (
 
 	blueauth "github.com/unstablebuild/blue/auth"
 	"github.com/unstablebuild/blue/auth/grpcauth"
-	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/extensionapi"
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
@@ -106,7 +105,8 @@ type PromptOpener interface {
 	) browser.Window
 }
 
-// Config controls which permission requests are granted without prompting.
+// Config controls which permission requests are granted without
+// prompting, and how the user is told about those that are not.
 type Config struct {
 	AutoAuthorizeExtensions        bool
 	AutoAuthorizeCommands          bool
@@ -121,17 +121,20 @@ func NewAuthorizer(
 	editor text.Editor,
 	promptOpener PromptOpener, storage storageapi.Service,
 	scheduleNextTick func(func()) bool,
-	notifications browserapi.Notifications,
+	status browser.TabManager,
 	trust *pkgtrust.Store, config Config,
 ) (*Authorizer, error) {
 	if editor == nil {
 		return nil, errors.New("editor is required")
 	}
+	if status == nil {
+		return nil, errors.New("status reporter is required")
+	}
 	if trust == nil {
 		return nil, errors.New("trust store is required")
 	}
 	a := &Authorizer{
-		prompter: newPermissionPrompter(promptOpener, scheduleNextTick, notifications),
+		prompter: newPermissionPrompter(promptOpener, scheduleNextTick, status),
 		storage:  storage,
 		config:   config,
 		trust:    trust,

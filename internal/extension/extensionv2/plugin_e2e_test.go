@@ -130,7 +130,7 @@ func TestPluginPermissionPromptE2E(t *testing.T) {
 					fn()
 					return true
 				},
-				nil, pkgtrust.NewStore(t.TempDir(), nil), ideauthorizer.Config{},
+				e2eBrowser{}, pkgtrust.NewStore(t.TempDir(), nil), ideauthorizer.Config{},
 			)
 			require.NoError(t, err)
 			runner, err := baseRunner.WorkspaceExtensionsRunner(

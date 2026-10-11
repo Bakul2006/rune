@@ -115,7 +115,7 @@ func (s *sandbox) launch() error {
 	tick := func(fn func()) bool { fn(); return true }
 	trust := pkgtrust.NewStore(s.dataDir, nil)
 	authorizer, err := ideauthorizer.NewAuthorizer(
-		s.editor, prompt, storage, tick, nil, trust, ideauthorizer.Config{
+		s.editor, prompt, storage, tick, s.browser, trust, ideauthorizer.Config{
 			AutoAuthorizeExtensions: true,
 			AutoAuthorizeCommands:   true,
 		})

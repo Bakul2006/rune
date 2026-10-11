@@ -38,6 +38,7 @@ import (
 	"unstable.build/rune/internal/handler/command"
 	"unstable.build/rune/internal/ide/idelsp/languages"
 	"unstable.build/rune/internal/ide/syntax"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/text/cmdenv"
 )
 
@@ -733,7 +734,8 @@ func WithDirtyTabAttr(attr term.Attributes) Option {
 }
 
 // WithActiveTabShader defines the continuous effect run over the labels
-// of tabs marked active via SetTabActivity, and its cadence. An empty
+// of tabs whose program reported working via SetTabStatus, and its
+// cadence. An empty
 // name disables it; zero fps or loop keep the catalog defaults.
 func WithActiveTabShader(name string, fps int, loop time.Duration) Option {
 	return func(cfg *Config) {
@@ -743,12 +745,23 @@ func WithActiveTabShader(name string, fps int, loop time.Duration) Option {
 	}
 }
 
-// WithOnTabActivity registers fn to be called on the host event loop
-// whenever a tab's activity changes, including when an active tab is
-// removed.
-func WithOnTabActivity(fn func()) Option {
+// WithTabStatusConfig styles the tab decorations that reflect the
+// status a tab's program reported via SetTabStatus.
+func WithTabStatusConfig(c browser.TabStatusConfig) Option {
 	return func(cfg *Config) {
-		cfg.OnTabActivity = fn
+		cfg.TabStatus = c
+	}
+}
+
+// WithOnTabStatus registers fn to be called on the host event loop
+// whenever a tab's status changes, with the status the tab had before
+// and the one it has now. A tab removed with a status reports a change
+// to idle.
+func WithOnTabStatus(
+	fn func(uri workspaceapi.URI, prev, status programstatus.Summary),
+) Option {
+	return func(cfg *Config) {
+		cfg.OnTabStatus = fn
 	}
 }
 

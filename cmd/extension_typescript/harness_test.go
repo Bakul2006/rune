@@ -419,8 +419,8 @@ func (m *fakeWM) SetWindowContent(w browserapi.Window, h browserapi.Handler) err
 	m.win, m.content = w, h
 	return nil
 }
-func (m *fakeWM) CloseWindow(browserapi.Window) error         { return nil }
-func (m *fakeWM) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (m *fakeWM) CloseWindow(browserapi.Window) error                       { return nil }
+func (m *fakeWM) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 func (m *fakeWM) shown() (browserapi.Window, browserapi.Handler) {
 	m.mu.Lock()

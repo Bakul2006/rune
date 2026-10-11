@@ -67,6 +67,7 @@ import (
 	"unstable.build/rune/internal/ide/syntax"
 	"unstable.build/rune/internal/ide/vctrl"
 	"unstable.build/rune/internal/llm"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/text"
 	"unstable.build/rune/internal/text/cmdenv"
@@ -4453,6 +4454,153 @@ func (c ideConfig) terminalConfig() vte.Config {
 	ret.CellPixelSize = c.cellPixelSize
 	ret.MinWidth = defaultMinWidth
 	ret.Search = c.terminalSearchConfig()
+	return ret
+}
+
+// tabStatusConfig reads terminal.status, which styles the decorations
+// drawn on tabs whose program reported a status.
+func (c ideConfig) tabStatusConfig() browser.TabStatusConfig {
+	ret := browser.DefaultTabStatusConfig()
+	cfg, ok := c.terminalStatus()
+	if !ok {
+		return ret
+	}
+	if spinner, err := cfg.GetString("spinner"); err == nil {
+		ret.Spinner = []rune(spinner)
+	} else if err != config.ErrNotFound {
+		c.errors["terminal.status.spinner"] = err
+	}
+	if fps, err := cfg.GetInt("spinner_fps"); err == nil {
+		ret.SpinnerFPS = fps
+	} else if err != config.ErrNotFound {
+		c.errors["terminal.status.spinner_fps"] = err
+	}
+	if icons, ok := c.getConfig(cfg, "icons"); ok {
+		type field struct {
+			key string
+			dst *rune
+		}
+		blocked := map[string]programstatus.Kind{
+			"permission": programstatus.KindPermission,
+			"question":   programstatus.KindQuestion,
+			"auth":       programstatus.KindAuth,
+		}
+		for key, kind := range blocked {
+			r, err := icons.GetRune(key)
+			if err != nil {
+				if err != config.ErrNotFound {
+					c.errors["terminal.status.icons."+key] = err
+				}
+				continue
+			}
+			ret.BlockedIcons[kind] = r
+		}
+		ret.BlockedIcons[programstatus.KindNone] = ret.BlockedIcons[programstatus.KindPermission]
+		for _, f := range []field{{"done", &ret.DoneIcon}, {"error", &ret.ErrorIcon}} {
+			r, err := icons.GetRune(f.key)
+			if err != nil {
+				if err != config.ErrNotFound {
+					c.errors["terminal.status.icons."+f.key] = err
+				}
+				continue
+			}
+			*f.dst = r
+		}
+	}
+	attrs := []struct {
+		key string
+		dst *term.Attributes
+	}{
+		{"idle_icon_attr", &ret.IdleIconAttr},
+		{"working_icon_attr", &ret.WorkingIconAttr},
+		{"working_done_attr", &ret.WorkingDoneAttr},
+		{"blocked_attr", &ret.BlockedAttr},
+		{"blocked_icon_attr", &ret.BlockedIconAttr},
+		{"done_attr", &ret.DoneAttr},
+		{"done_icon_attr", &ret.DoneIconAttr},
+		{"error_attr", &ret.ErrorAttr},
+		{"error_icon_attr", &ret.ErrorIconAttr},
+	}
+	for _, a := range attrs {
+		*a.dst = c.terminalStatusAttr(cfg, a.key, *a.dst)
+	}
+	return ret
+}
+
+func (c ideConfig) terminalStatus() (config.Config, bool) {
+	cfg, ok := c.terminal()
+	if !ok {
+		return nil, false
+	}
+	return c.getConfig(cfg, "status")
+}
+
+func (c ideConfig) terminalStatusAttr(
+	cfg config.Config, key string, def term.Attributes,
+) term.Attributes {
+	attr, err := config.GetAttributes(cfg, key)
+	if err != nil {
+		if err != config.ErrNotFound {
+			c.errors["terminal.status."+key] = err
+		}
+		return def
+	}
+	return attr
+}
+
+// tabStatusEnabled reads terminal.status.enabled; a disabled status
+// leaves tabs undecorated and raises no notifications.
+func (c ideConfig) tabStatusEnabled() bool {
+	cfg, ok := c.terminalStatus()
+	if !ok {
+		return true
+	}
+	enabled, err := cfg.GetBool("enabled")
+	if err != nil {
+		if err != config.ErrNotFound {
+			c.errors["terminal.status.enabled"] = err
+		}
+		return true
+	}
+	return enabled
+}
+
+// tabStatusNotifyConfig reads terminal.status.notify, the states a tab
+// entering raises a notification for when it is out of sight, and
+// terminal.status.notify_interval, the minimum time between two
+// notifications for the same tab.
+func (c ideConfig) tabStatusNotifyConfig() tabStatusNotifyConfig {
+	ret := defaultTabStatusNotifyConfig()
+	cfg, ok := c.terminalStatus()
+	if !ok {
+		return ret
+	}
+	if names, err := getStringSlice(cfg, "notify"); err == nil {
+		states := make(map[programstatus.State]bool, len(names))
+		for _, name := range names {
+			switch name {
+			case "blocked":
+				states[programstatus.Blocked] = true
+			case "error":
+				states[programstatus.Error] = true
+			case "done":
+				states[programstatus.Done] = true
+			case "working":
+				states[programstatus.Working] = true
+			default:
+				c.errors["terminal.status.notify"] = fmt.Errorf(
+					"unknown state %q: expected blocked, error, done or working", name)
+			}
+		}
+		ret.states = states
+	} else if err != config.ErrNotFound {
+		c.errors["terminal.status.notify"] = err
+	}
+	if d, err := config.GetDuration(cfg, "notify_interval", ret.interval); err == nil {
+		ret.interval = d
+	} else if err != config.ErrNotFound {
+		c.errors["terminal.status.notify_interval"] = err
+	}
 	return ret
 }
 

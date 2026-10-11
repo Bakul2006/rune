@@ -35,6 +35,8 @@ import (
 	status "google.golang.org/grpc/status"
 	"unstable.build/rune/internal/browser/browsertest"
 	"unstable.build/rune/internal/debug"
+	"unstable.build/rune/internal/term/programstatus"
+	"unstable.build/rune/internal/workspace/processctx"
 )
 
 const asyncResultsSleepDuration = 300 * time.Millisecond
@@ -140,7 +142,7 @@ func TestServerOpen(t *testing.T) {
 	})
 }
 
-func TestServerSetTabActivity(t *testing.T) {
+func TestServerSetTabStatus(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("delegates to underlying Browser under the lock", func(t *testing.T) {
@@ -151,17 +153,40 @@ func TestServerSetTabActivity(t *testing.T) {
 		uri, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
 		require.NoError(t, err)
 
-		mock.EXPECT().SetTabActivity(gomock.Eq(uri), true).
-			DoAndReturn(func(workspaceapi.URI, bool) error {
+		want := programstatus.Report{
+			ID: "build", State: programstatus.Working, Progress: 25,
+			Title: "link", Msg: "building",
+		}
+		mock.EXPECT().SetTabStatus(gomock.Eq(uri), want).
+			DoAndReturn(func(workspaceapi.URI, programstatus.Report) error {
 				assert.False(t, mu.TryLock(), "must be called under the UI lock")
 				return nil
 			})
 
-		res, err := s.SetTabActivity(ctx, &browserrpc.SetTabActivityRequest{
-			ResourceId: uri.String(), Active: true,
+		res, err := s.SetTabStatus(ctx, &browserrpc.SetTabStatusRequest{
+			ResourceId: uri.String(), Id: "build", State: uint32(browserapi.TabWorking),
+			Progress: 25, Title: "link", Message: "building",
 		})
 		require.NoError(t, err)
 		assert.NotNil(t, res)
+	})
+
+	t.Run("attributes the report to the calling extension", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		s, mock := newTestServer(ctrl, new(sync.Mutex))
+		uri, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
+		require.NoError(t, err)
+
+		mock.EXPECT().SetTabStatus(gomock.Eq(uri), programstatus.Report{
+			State: programstatus.Done, Progress: -1, App: "rune-agent", Msg: "ok",
+		}).Return(nil)
+
+		_, err = s.SetTabStatus(processctx.ContextWithExtensionID(ctx, "rune-agent"),
+			&browserrpc.SetTabStatusRequest{
+				ResourceId: uri.String(), State: uint32(browserapi.TabDone), Message: "ok",
+			})
+		require.NoError(t, err)
 	})
 
 	t.Run("bubbles up Browser error", func(t *testing.T) {
@@ -169,10 +194,10 @@ func TestServerSetTabActivity(t *testing.T) {
 		defer ctrl.Finish()
 		s, mock := newTestServer(ctrl, new(sync.Mutex))
 
-		mock.EXPECT().SetTabActivity(gomock.Any(), false).
+		mock.EXPECT().SetTabStatus(gomock.Any(), programstatus.Report{Progress: -1}).
 			Return(errors.New("unknown tab"))
 
-		_, err := s.SetTabActivity(ctx, &browserrpc.SetTabActivityRequest{
+		_, err := s.SetTabStatus(ctx, &browserrpc.SetTabStatusRequest{
 			ResourceId: "file:///a",
 		})
 		require.Error(t, err)
@@ -184,8 +209,38 @@ func TestServerSetTabActivity(t *testing.T) {
 		defer ctrl.Finish()
 		s, _ := newTestServer(ctrl, new(sync.Mutex))
 
-		_, err := s.SetTabActivity(ctx, &browserrpc.SetTabActivityRequest{
-			ResourceId: "%zz", Active: true,
+		_, err := s.SetTabStatus(ctx, &browserrpc.SetTabStatusRequest{
+			ResourceId: "%zz", State: uint32(browserapi.TabWorking),
+		})
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	})
+
+	t.Run("rejects unknown state and kind", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		s, _ := newTestServer(ctrl, new(sync.Mutex))
+
+		_, err := s.SetTabStatus(ctx, &browserrpc.SetTabStatusRequest{
+			ResourceId: "file:///a", State: 42,
+		})
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		_, err = s.SetTabStatus(ctx, &browserrpc.SetTabStatusRequest{
+			ResourceId: "file:///a", State: uint32(browserapi.TabBlocked), Kind: 42,
+		})
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	})
+
+	t.Run("rejects a report outside the protocol limits", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		s, _ := newTestServer(ctrl, new(sync.Mutex))
+
+		_, err := s.SetTabStatus(ctx, &browserrpc.SetTabStatusRequest{
+			ResourceId: "file:///a", State: uint32(browserapi.TabWorking), Id: "/a",
+		})
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		_, err = s.SetTabStatus(ctx, &browserrpc.SetTabStatusRequest{
+			ResourceId: "file:///a", State: uint32(browserapi.TabDone), Message: "a\x1bb",
 		})
 		assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	})

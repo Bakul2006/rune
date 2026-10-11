@@ -18,6 +18,7 @@ package vteparser
 
 import (
 	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 // Handler abstracts a terminal TUI implementation.
@@ -253,6 +254,17 @@ type Handler interface {
 	// after an optional ';', the base64 payload. It is only valid for
 	// the duration of the call.
 	GraphicsCommand(data []byte)
+
+	// ProgramStatus applies an OSC 7501 report that already passed every
+	// protocol limit.
+	ProgramStatus(report programstatus.Report)
+
+	// ProgramStatusQuery answers OSC 7501 feature detection by echoing
+	// the query back with the given terminator (BEL or ST).
+	ProgramStatusQuery(terminator string)
+
+	// PromptStart marks the beginning of a shell prompt (OSC 133 A).
+	PromptStart()
 }
 
 // KeyboardMode is the vte keyboard mode.

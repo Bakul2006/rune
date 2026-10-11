@@ -43,6 +43,7 @@ import (
 	"unstable.build/rune/internal/extension"
 	"unstable.build/rune/internal/ide/ideauthorizer"
 	"unstable.build/rune/internal/ide/idepkg/pkgtrust"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/text/texttest"
 	"unstable.build/rune/internal/workspace"
 )
@@ -126,7 +127,8 @@ func (e2eBrowser) SetTabName(workspaceapi.URI, string, term.Attributes) error { 
 
 func (e2eBrowser) OnTabExit(workspaceapi.URI) bool { return false }
 
-func (e2eBrowser) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (e2eBrowser) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (e2eBrowser) EndTabStatus(workspaceapi.URI) error                       { return nil }
 
 func (e2eBrowser) Tab(
 	workspaceapi.URI, rune, string, browserapi.Handler,
@@ -214,7 +216,7 @@ func dialExtensionWorkspace(
 	authorizer, err := ideauthorizer.NewAuthorizer(
 		texttest.NopEditor(), prompt, storage,
 		func(fn func()) bool { fn(); return true },
-		nil, pkgtrust.NewStore(t.TempDir(), nil), ideauthorizer.Config{},
+		e2eBrowser{}, pkgtrust.NewStore(t.TempDir(), nil), ideauthorizer.Config{},
 	)
 	require.NoError(t, err)
 

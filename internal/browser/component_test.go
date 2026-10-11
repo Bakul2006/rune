@@ -18,6 +18,7 @@ package browser
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/term"
 	tcomponent "unstable.build/rune/internal/component"
 	thandler "unstable.build/rune/internal/handler"
+	"unstable.build/rune/internal/term/programstatus"
 )
 
 func TestNewTabFromContent(t *testing.T) {
@@ -1403,7 +1405,11 @@ func newActivityComponent(t *testing.T, onActivity func()) (*Component, []*Tab) 
 	t.Helper()
 	cfg := DefaultConfig()
 	cfg.ActiveTabShader = "pulse"
-	cfg.OnTabActivity = onActivity
+	if onActivity != nil {
+		cfg.OnTabStatus = func(workspaceapi.URI, programstatus.Summary, programstatus.Summary) {
+			onActivity()
+		}
+	}
 	b := NewComponent(cfg)
 	b.SetInterrupter(term.NopInterrupter())
 	b.Resize(40, 10)
@@ -1418,52 +1424,87 @@ func newActivityComponent(t *testing.T, onActivity func()) (*Component, []*Tab) 
 	return b, tabs
 }
 
-func TestSetTabActivity(t *testing.T) {
+func TestSetTabStatus(t *testing.T) {
 	var calls int
 	b, tabs := newActivityComponent(t, func() { calls++ })
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	clearAll := programstatus.Report{State: programstatus.Clear}
 
 	unknown, err := workspaceapi.ParseURI("file:///unknown")
 	require.NoError(t, err)
-	assert.False(t, b.SetTabActivity(unknown, true))
-	assert.False(t, b.HasActiveTabs())
+	assert.False(t, b.SetTabStatus(unknown, working))
+	assert.False(t, b.HasWorkingTabs())
 	assert.False(t, b.shadedTabs.Running())
 	assert.Zero(t, calls)
 
-	require.True(t, b.SetTabActivity(tabs[1].uri, true))
-	assert.True(t, b.HasActiveTabs())
+	require.True(t, b.SetTabStatus(tabs[1].uri, working))
+	assert.True(t, b.HasWorkingTabs())
 	assert.True(t, b.shadedTabs.Running())
 	assert.Equal(t, []int{1}, b.activeTabIndices())
 	assert.Equal(t, 1, calls)
 
-	require.True(t, b.SetTabActivity(tabs[1].uri, true))
-	assert.Equal(t, 1, calls, "setting the current state again is a no-op")
+	require.True(t, b.SetTabStatus(tabs[1].uri, working))
+	assert.Equal(t, 1, calls, "reporting the current state again is a no-op")
 
-	require.True(t, b.SetTabActivity(tabs[2].uri, true))
+	require.True(t, b.SetTabStatus(tabs[2].uri, working))
 	assert.Equal(t, []int{1, 2}, b.activeTabIndices())
 
-	require.True(t, b.SetTabActivity(tabs[1].uri, false))
+	require.True(t, b.SetTabStatus(tabs[1].uri, clearAll))
 	assert.True(t, b.shadedTabs.Running(), "another tab is still active")
-	require.True(t, b.SetTabActivity(tabs[2].uri, false))
-	assert.False(t, b.HasActiveTabs())
+	require.True(t, b.SetTabStatus(tabs[2].uri, clearAll))
+	assert.False(t, b.HasWorkingTabs())
 	assert.False(t, b.shadedTabs.Running())
 	assert.Equal(t, 4, calls)
 }
 
-func TestTabActivityFollowsMovedTab(t *testing.T) {
+func TestTabStatusFollowsMovedTab(t *testing.T) {
 	b, tabs := newActivityComponent(t, nil)
-	require.True(t, b.SetTabActivity(tabs[0].uri, true))
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	require.True(t, b.SetTabStatus(tabs[0].uri, working))
 	require.True(t, b.SetContentToTab(b.Focus(), 0))
 	require.NoError(t, b.MoveTabRight(b.Focus()))
 	assertTabNames(t, b, []string{"b", "a", "c"})
 	assert.Equal(t, []int{1}, b.activeTabIndices())
 }
 
-func TestRemoveTabClearsActivity(t *testing.T) {
+func TestOnTabStatusReportsTransitions(t *testing.T) {
+	type change struct {
+		uri          workspaceapi.URI
+		prev, status programstatus.State
+		msg          string
+	}
+	var changes []change
+	cfg := DefaultConfig()
+	cfg.OnTabStatus = func(uri workspaceapi.URI, prev, status programstatus.Summary) {
+		changes = append(changes, change{uri, prev.State, status.State, status.Msg})
+	}
+	b := NewComponent(cfg)
+	t.Cleanup(func() { _ = b.Close() })
+	uri, err := workspaceapi.ParseURI("file:///a")
+	require.NoError(t, err)
+	h := newTestHandler()
+	tab := b.NewTab(uri, 'o', "a", h, h)
+
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	done := programstatus.Report{State: programstatus.Done, Progress: -1, Msg: "ok"}
+	require.True(t, b.SetTabStatus(uri, working))
+	require.True(t, b.SetTabStatus(uri, working))
+	require.True(t, b.SetTabStatus(uri, done))
+	require.True(t, b.RemoveTab(tab))
+	assert.Equal(t, []change{
+		{uri, programstatus.Idle, programstatus.Working, ""},
+		{uri, programstatus.Working, programstatus.Done, "ok"},
+		{uri, programstatus.Done, programstatus.Idle, ""},
+	}, changes)
+}
+
+func TestRemoveTabClearsStatus(t *testing.T) {
 	var calls int
 	b, tabs := newActivityComponent(t, func() { calls++ })
-	require.True(t, b.SetTabActivity(tabs[0].uri, true))
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	require.True(t, b.SetTabStatus(tabs[0].uri, working))
 	require.True(t, b.RemoveTab(tabs[0]))
-	assert.False(t, b.HasActiveTabs())
+	assert.False(t, b.HasWorkingTabs())
 	assert.False(t, b.shadedTabs.Running())
 	assert.Equal(t, 2, calls)
 
@@ -1471,10 +1512,16 @@ func TestRemoveTabClearsActivity(t *testing.T) {
 	require.True(t, b.RemoveTab(tabs[1]))
 	assert.Equal(t, 2, calls)
 
+	// A tab whose program reported idle has a status to drop.
+	require.True(t, b.SetTabStatus(tabs[2].uri, programstatus.Report{State: programstatus.Idle, Progress: -1}))
+	require.Equal(t, 3, calls)
+	require.True(t, b.RemoveTab(tabs[2]))
+	assert.Equal(t, 4, calls)
+
 	// A tab reopened under the same uri starts idle.
 	h := newTestHandler()
 	b.NewTab(tabs[0].uri, 'o', "a", h, h)
-	assert.False(t, b.HasActiveTabs())
+	assert.False(t, b.HasWorkingTabs())
 }
 
 func TestSetInterrupterStartsPendingActivity(t *testing.T) {
@@ -1486,13 +1533,347 @@ func TestSetInterrupterStartsPendingActivity(t *testing.T) {
 	h := newTestHandler()
 	b.NewTab(uri, 'o', "a", h, h)
 
-	require.True(t, b.SetTabActivity(uri, true))
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	require.True(t, b.SetTabStatus(uri, working))
 	assert.False(t, b.shadedTabs.Running())
 	b.SetInterrupter(term.NopInterrupter())
 	assert.True(t, b.shadedTabs.Running())
 
 	require.NoError(t, b.Close())
 	assert.False(t, b.shadedTabs.Running())
+}
+
+// newStatusComponent returns a frameless Component with the tabs
+// "abcdefghij" (icon 'a') and "b" (icon 'B') open, the second one in
+// the focused window, so the first tab's icon lands on cell 0 and its
+// name on cells 2 to 11.
+func newStatusComponent(t *testing.T) (*Component, []*Tab, func() []term.Cell) {
+	t.Helper()
+	cfg := DefaultConfig()
+	cfg.Frame = false
+	cfg.FrameUnion = false
+	cfg.Dim = false
+	cfg.ActiveTabShader = "pulse"
+	b := NewComponent(cfg)
+	b.SetInterrupter(term.NopInterrupter())
+	t.Cleanup(func() { _ = b.Close() })
+
+	uriA, err := workspaceapi.ParseURI("file:///a")
+	require.NoError(t, err)
+	h := newTestHandler()
+	tabA := b.NewTab(uriA, 'a', "abcdefghij", h, h)
+	uriB, err := workspaceapi.ParseURI("file:///b")
+	require.NoError(t, err)
+	h = newTestHandler()
+	tabB := b.NewTab(uriB, 'B', "b", h, h)
+	require.NoError(t, b.Focus().SetContent(tabB))
+
+	width, height := 40, 5
+	b.Resize(width, height)
+	draw := func() []term.Cell {
+		w := term.NewStringWriter(width, height)
+		b.Draw(w)
+		return w.Cells()
+	}
+	draw()
+	return b, []*Tab{tabA, tabB}, draw
+}
+
+func TestSetTabStatusDecorations(t *testing.T) {
+	const offset = term.AttrNegativeVerticalRenderOffset
+	green := term.Attributes{Fg: term.ColorGreen}
+	red := term.Attributes{Fg: term.ColorRed}
+	yellow := term.Attributes{Fg: term.ColorYellow}
+	bell := term.Attributes{Attrs: term.AttrBlink}
+	// The shader is a no-op on the first frame, so the unfocused name
+	// attribute is what the tab bar paints.
+	nonFocus := DefaultConfig().NonFocusTabAttr
+	nonFocus.Attrs |= offset
+
+	suite := []struct {
+		desc   string
+		status programstatus.Report
+		// bell sets the needs-attention name attribute before the status.
+		bell bool
+		// Expected decorations of tab a, which is not focused.
+		icon     rune
+		iconAttr term.Attributes
+		nameAttr term.Attributes
+		// painted is how many leading name cells carry the progress color.
+		painted int
+		shaded  bool
+	}{
+		{
+			desc:     "idle",
+			status:   programstatus.Report{State: programstatus.Clear},
+			icon:     'a',
+			iconAttr: term.Attributes{Attrs: offset},
+			nameAttr: nonFocus,
+		},
+		{
+			desc:     "idle as reported",
+			status:   programstatus.Report{State: programstatus.Idle, Progress: -1},
+			icon:     'a',
+			iconAttr: term.Attributes{Fg: term.ColorYellow, Attrs: offset},
+			nameAttr: nonFocus,
+		},
+		{
+			desc:     "working",
+			status:   programstatus.Report{State: programstatus.Working, Progress: -1},
+			icon:     '⠋',
+			iconAttr: term.Attributes{Fg: term.ColorYellow, Attrs: offset},
+			nameAttr: nonFocus,
+			shaded:   true,
+		},
+		{
+			desc:     "working with progress",
+			status:   programstatus.Report{State: programstatus.Working, Progress: 40},
+			icon:     '⠋',
+			iconAttr: term.Attributes{Fg: term.ColorYellow, Attrs: offset},
+			nameAttr: nonFocus,
+			painted:  4,
+			shaded:   true,
+		},
+		{
+			desc: "blocked on permission",
+			status: programstatus.Report{
+				State: programstatus.Blocked, Kind: programstatus.KindPermission, Progress: -1,
+			},
+			icon:     '󰹇',
+			iconAttr: term.Attributes{Fg: term.ColorRed, Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, yellow),
+		},
+		{
+			desc: "blocked on a question",
+			status: programstatus.Report{
+				State: programstatus.Blocked, Kind: programstatus.KindQuestion, Progress: -1,
+			},
+			icon:     '󰋗',
+			iconAttr: term.Attributes{Fg: term.ColorRed, Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, yellow),
+		},
+		{
+			desc: "blocked on auth",
+			status: programstatus.Report{
+				State: programstatus.Blocked, Kind: programstatus.KindAuth, Progress: -1,
+			},
+			icon:     '󰗒',
+			iconAttr: term.Attributes{Fg: term.ColorRed, Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, yellow),
+		},
+		{
+			desc:     "blocked without a kind",
+			status:   programstatus.Report{State: programstatus.Blocked, Progress: -1},
+			icon:     '󰹇',
+			iconAttr: term.Attributes{Fg: term.ColorRed, Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, yellow),
+		},
+		{
+			desc:     "done",
+			status:   programstatus.Report{State: programstatus.Done, Progress: -1},
+			icon:     '󰗠',
+			iconAttr: term.Attributes{Fg: term.ColorSilver, Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, green),
+		},
+		{
+			desc:     "error",
+			status:   programstatus.Report{State: programstatus.Error, Progress: -1},
+			icon:     '󰅙',
+			iconAttr: term.Attributes{Fg: term.ColorYellow, Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, red),
+		},
+		{
+			desc:     "bell alone",
+			bell:     true,
+			status:   programstatus.Report{State: programstatus.Clear},
+			icon:     'a',
+			iconAttr: term.Attributes{Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, bell),
+		},
+		{
+			desc:     "bell yields to the status color",
+			bell:     true,
+			status:   programstatus.Report{State: programstatus.Error, Progress: -1},
+			icon:     '󰅙',
+			iconAttr: term.Attributes{Fg: term.ColorYellow, Attrs: offset},
+			nameAttr: term.AttributesUnion(nonFocus, term.Attributes{
+				Fg: term.ColorRed, Attrs: term.AttrBlink,
+			}),
+		},
+	}
+
+	for _, tc := range suite {
+		t.Run(tc.desc, func(t *testing.T) {
+			b, tabs, draw := newStatusComponent(t)
+			a := tabs[0]
+			if tc.bell {
+				require.True(t, b.SetTabDefaultNameAndAttrs(a.uri, "abcdefghij", bell))
+				require.True(t, b.SetTabNameAndAttrs(a.uri, "abcdefghij", bell))
+			}
+			require.True(t, b.SetTabStatus(a.uri, tc.status))
+			cells := draw()
+
+			assert.Equal(t, tc.icon, cells[0].Ch)
+			assert.Equal(t, tc.iconAttr, cells[0].Attributes())
+			// Wide icons push the name one cell to the right.
+			name := slices.IndexFunc(cells[1:], func(c term.Cell) bool { return c.Ch == 'a' }) + 1
+			require.Positive(t, name)
+			for i := range 10 {
+				want := tc.nameAttr
+				if i < tc.painted {
+					want = term.AttributesUnion(want, green)
+				}
+				assert.Equalf(t, want, cells[name+i].Attributes(), "name cell %d", i)
+			}
+			assert.Equal(t, tc.shaded, b.shadedTabs.Running())
+			assert.Equal(t, tc.shaded, b.spinner != nil)
+
+			attrs, ok := b.TabAttrs(a.uri)
+			require.True(t, ok)
+			if tc.bell {
+				assert.Equal(t, bell, attrs, "TabAttrs reports the caller's attribute")
+			} else {
+				assert.Equal(t, term.Attributes{}, attrs)
+			}
+
+			// Back to idle restores the tab as it was.
+			require.True(t, b.SetTabStatus(a.uri, programstatus.Report{State: programstatus.Clear}))
+			cells = draw()
+			assert.Equal(t, 'a', cells[0].Ch)
+			assert.Equal(t, term.Attributes{Attrs: offset}, cells[0].Attributes())
+			want := nonFocus
+			if tc.bell {
+				want = term.AttributesUnion(nonFocus, bell)
+			}
+			for i := range 10 {
+				assert.Equalf(t, want, cells[2+i].Attributes(), "name cell %d", i)
+			}
+			assert.False(t, b.shadedTabs.Running())
+			assert.Nil(t, b.spinner)
+		})
+	}
+}
+
+func TestSetTabStatusSpinnerCycles(t *testing.T) {
+	b, tabs := newActivityComponent(t, nil)
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	require.True(t, b.SetTabStatus(tabs[0].uri, working))
+	require.NotNil(t, b.spinner)
+	frames := DefaultTabStatusConfig().Spinner
+
+	b.Draw(term.NewStringWriter(40, 10))
+	assert.Equal(t, frames[0], b.tabs.TabIcon(0))
+	assert.Equal(t, 'o', b.tabs.TabIcon(1), "idle tabs keep their icon")
+
+	b.spinner.epoch.Store(3)
+	b.Draw(term.NewStringWriter(40, 10))
+	assert.Equal(t, frames[3], b.tabs.TabIcon(0))
+
+	// A tab that starts working joins at the current frame.
+	require.True(t, b.SetTabStatus(tabs[1].uri, working))
+	assert.Equal(t, frames[3], b.tabs.TabIcon(1))
+
+	b.spinner.epoch.Store(int64(len(frames) + 1))
+	b.Draw(term.NewStringWriter(40, 10))
+	assert.Equal(t, frames[1], b.tabs.TabIcon(0))
+	assert.Equal(t, frames[1], b.tabs.TabIcon(1))
+}
+
+func TestSetTabStatusWithoutSpinnerKeepsIcon(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TabStatus.Spinner = nil
+	b := NewComponent(cfg)
+	b.SetInterrupter(term.NopInterrupter())
+	t.Cleanup(func() { _ = b.Close() })
+	uri, err := workspaceapi.ParseURI("file:///a")
+	require.NoError(t, err)
+	h := newTestHandler()
+	b.NewTab(uri, 'o', "a", h, h)
+
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	require.True(t, b.SetTabStatus(uri, working))
+	assert.Nil(t, b.spinner)
+	b.Draw(term.NewStringWriter(40, 10))
+	assert.Equal(t, 'o', b.tabs.TabIcon(0))
+}
+
+func TestSetTabStatusWithoutIconRestoresUnderlyingIcon(t *testing.T) {
+	suite := []struct {
+		name string
+		from programstatus.State
+		to   programstatus.State
+	}{
+		{"blocked to working", programstatus.Blocked, programstatus.Working},
+		{"done to working", programstatus.Done, programstatus.Working},
+		{"error to working", programstatus.Error, programstatus.Working},
+		{"idle to working", programstatus.Idle, programstatus.Working},
+		{"error to blocked without icons", programstatus.Error, programstatus.Blocked},
+		{"blocked to done without icon", programstatus.Blocked, programstatus.Done},
+		{"done to error without icon", programstatus.Done, programstatus.Error},
+		{"blocked to idle", programstatus.Blocked, programstatus.Idle},
+		{"error to clear", programstatus.Error, programstatus.Clear},
+	}
+	for _, tc := range suite {
+		t.Run(tc.name, func(t *testing.T) {
+			b, tabs, draw := newStatusComponent(t)
+			b.config.TabStatus.Spinner = nil
+			switch tc.to {
+			case programstatus.Blocked:
+				b.config.TabStatus.BlockedIcons = nil
+			case programstatus.Done:
+				b.config.TabStatus.DoneIcon = 0
+			case programstatus.Error:
+				b.config.TabStatus.ErrorIcon = 0
+			}
+			uri := tabs[0].uri
+			require.True(t, b.SetTabStatus(uri, programstatus.Report{State: tc.from, Progress: -1}))
+			if tc.from != programstatus.Idle {
+				require.NotEqual(t, 'a', draw()[0].Ch)
+			}
+
+			require.True(t, b.SetTabStatus(uri, programstatus.Report{State: tc.to, Progress: -1}))
+			assert.Equal(t, 'a', b.tabs.TabIcon(0))
+			assert.Equal(t, 'a', draw()[0].Ch)
+			assert.Nil(t, b.spinner)
+		})
+	}
+}
+
+func TestStatusRollup(t *testing.T) {
+	b, tabs := newActivityComponent(t, nil)
+
+	sum, uri := b.StatusRollup()
+	assert.Equal(t, programstatus.Summary{Progress: -1}, sum)
+	assert.Equal(t, workspaceapi.URI{}, uri)
+
+	working := programstatus.Report{State: programstatus.Working, Progress: -1}
+	done := programstatus.Report{State: programstatus.Done, Progress: -1, Msg: "ok"}
+	blocked := programstatus.Report{State: programstatus.Blocked, Progress: -1}
+	clearAll := programstatus.Report{State: programstatus.Clear}
+	require.True(t, b.SetTabStatus(tabs[0].uri, working))
+	require.True(t, b.SetTabStatus(tabs[2].uri, done))
+	sum, uri = b.StatusRollup()
+	assert.Equal(t, programstatus.Done, sum.State)
+	assert.Equal(t, "ok", sum.Msg)
+	assert.Equal(t, tabs[2].uri, uri)
+
+	require.True(t, b.SetTabStatus(tabs[1].uri, blocked))
+	sum, uri = b.StatusRollup()
+	assert.Equal(t, programstatus.Blocked, sum.State)
+	assert.Equal(t, tabs[1].uri, uri)
+
+	require.True(t, b.SetTabStatus(tabs[1].uri, clearAll))
+	require.True(t, b.SetTabStatus(tabs[2].uri, clearAll))
+	sum, uri = b.StatusRollup()
+	assert.Equal(t, programstatus.Working, sum.State)
+	assert.Equal(t, tabs[0].uri, uri)
+
+	require.True(t, b.SetTabStatus(tabs[0].uri, clearAll))
+	require.True(t, b.SetTabStatus(tabs[2].uri, programstatus.Report{State: programstatus.Idle, Progress: -1}))
+	sum, uri = b.StatusRollup()
+	assert.Equal(t, programstatus.Idle, sum.State)
+	assert.Len(t, sum.Records, 1, "a reported idle outranks silence")
+	assert.Equal(t, tabs[2].uri, uri)
 }
 
 func TestTabAttrs(t *testing.T) {
@@ -2584,4 +2965,177 @@ func TestWinDropTabName(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, "notes.md", name)
 		})
+}
+
+func TestTabStatusRecords(t *testing.T) {
+	var changes []programstatus.Summary
+	cfg := DefaultConfig()
+	cfg.OnTabStatus = func(_ workspaceapi.URI, _, status programstatus.Summary) {
+		changes = append(changes, status)
+	}
+	b := NewComponent(cfg)
+	b.SetInterrupter(term.NopInterrupter())
+	b.Resize(40, 10)
+	t.Cleanup(func() { _ = b.Close() })
+	uri, err := workspaceapi.ParseURI("rune-agent://model/chat")
+	require.NoError(t, err)
+	h := newTestHandler()
+	tab := b.NewTab(uri, 'o', "chat", h, h)
+	other, err := workspaceapi.ParseURI("file:///other")
+	require.NoError(t, err)
+
+	assert.False(t, b.SetTabStatus(other, programstatus.Report{State: programstatus.Working, Progress: -1}),
+		"reporting on an unknown tab fails")
+
+	require.True(t, b.SetTabStatus(uri, programstatus.Report{
+		State: programstatus.Working, Progress: -1, Title: "Thinking",
+	}))
+	status, ok := b.TabStatus(uri)
+	require.True(t, ok)
+	assert.Equal(t, programstatus.Working, status.State)
+	assert.Equal(t, "Thinking", status.Title)
+	assert.True(t, b.HasWorkingTabs())
+
+	require.True(t, b.SetTabStatus(uri, programstatus.Report{
+		ID: "agent/1", State: programstatus.Blocked, Kind: programstatus.KindQuestion,
+		Progress: -1, Msg: "Which one?",
+	}))
+	status, _ = b.TabStatus(uri)
+	assert.Equal(t, programstatus.Blocked, status.State, "records roll up")
+	assert.Equal(t, programstatus.KindQuestion, status.Kind)
+	require.Len(t, status.Records, 2)
+
+	require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "agent/1", State: programstatus.Clear}))
+	status, _ = b.TabStatus(uri)
+	assert.Equal(t, programstatus.Working, status.State, "clear removes the record")
+	require.Len(t, status.Records, 1)
+
+	require.True(t, b.SetTabStatus(uri, programstatus.Report{
+		State: programstatus.Working, Progress: -1, Title: "Thinking",
+	}))
+	n := len(changes)
+	require.True(t, b.SetTabStatus(uri, programstatus.Report{
+		State: programstatus.Working, Progress: -1, Title: "Thinking",
+	}))
+	assert.Len(t, changes, n, "a repeated report is not a change")
+
+	require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Done, Progress: -1, Msg: "ok"}))
+	status, _ = b.TabStatus(uri)
+	assert.Equal(t, programstatus.Done, status.State)
+	assert.False(t, b.HasWorkingTabs())
+
+	t.Run("a key event acknowledges done", func(t *testing.T) {
+		tab.Handle(term.Event{Type: term.EventKey, Ch: 'j'})
+		status, _ := b.TabStatus(uri)
+		assert.Equal(t, programstatus.Idle, status.State)
+		assert.Empty(t, status.Records)
+	})
+
+	t.Run("AckStatus keeps working and blocked", func(t *testing.T) {
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Working, Progress: -1}))
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "x", State: programstatus.Error, Progress: -1}))
+		tab.AckStatus()
+		status, _ := b.TabStatus(uri)
+		assert.Equal(t, programstatus.Working, status.State)
+		require.Len(t, status.Records, 1)
+	})
+
+	t.Run("EndTabStatus keeps done and error", func(t *testing.T) {
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Clear}))
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "a", State: programstatus.Working, Progress: -1}))
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "b", State: programstatus.Blocked, Progress: -1}))
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "c", State: programstatus.Idle, Progress: -1}))
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "d", State: programstatus.Done, Progress: -1}))
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "e", State: programstatus.Error, Progress: -1}))
+		require.True(t, b.EndTabStatus(uri))
+		status, _ := b.TabStatus(uri)
+		assert.Equal(t, programstatus.Error, status.State)
+		require.Len(t, status.Records, 2)
+		assert.Equal(t, "d", status.Records[0].ID)
+		assert.Equal(t, "e", status.Records[1].ID)
+
+		n := len(changes)
+		require.True(t, b.EndTabStatus(uri))
+		assert.Len(t, changes, n, "nothing left to end is not a change")
+		assert.False(t, b.EndTabStatus(other), "ending on an unknown tab fails")
+	})
+
+	t.Run("a mouse event does not acknowledge", func(t *testing.T) {
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Error, Progress: -1}))
+		tab.Handle(term.Event{Type: term.EventMouse})
+		status, _ := b.TabStatus(uri)
+		assert.Equal(t, programstatus.Error, status.State)
+	})
+
+	t.Run("showing the tab acknowledges", func(t *testing.T) {
+		win := b.Focus()
+		require.True(t, b.SetContentToTab(win, 0))
+		status, _ := b.TabStatus(uri)
+		assert.Equal(t, programstatus.Idle, status.State)
+		assert.Empty(t, status.Records)
+	})
+
+	t.Run("focusing the window showing the tab acknowledges", func(t *testing.T) {
+		shown := b.Focus()
+		other, ok := b.Split(browserapi.OrientationRight, shown, newTestHandler())
+		require.True(t, ok)
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Done, Progress: -1}))
+		status, _ := b.TabStatus(uri)
+		require.Equal(t, programstatus.Done, status.State, "reported out of focus")
+
+		b.SetFocus(shown)
+		status, _ = b.TabStatus(uri)
+		assert.Equal(t, programstatus.Idle, status.State)
+		require.NoError(t, other.Close())
+	})
+
+	t.Run("done reported in sight is acknowledged right away", func(t *testing.T) {
+		n := len(changes)
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Done, Progress: -1, Msg: "ok"}))
+		status, _ := b.TabStatus(uri)
+		assert.Equal(t, programstatus.Idle, status.State)
+		assert.Empty(t, status.Records)
+		require.Len(t, changes, n+2)
+		assert.Equal(t, "ok", changes[n].Msg, "the done record is reported before it is acknowledged")
+	})
+
+	t.Run("working reported in sight stays", func(t *testing.T) {
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Working, Progress: -1}))
+		status, _ := b.TabStatus(uri)
+		assert.Equal(t, programstatus.Working, status.State)
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Clear}))
+	})
+
+	t.Run("out of focus nothing is in sight until focus returns", func(t *testing.T) {
+		shown := b.Focus()
+		other, ok := b.Split(browserapi.OrientationRight, shown, newTestHandler())
+		require.True(t, ok)
+		b.OnFocusChange(false)
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{State: programstatus.Error, Progress: -1}))
+		status, _ := b.TabStatus(uri)
+		require.Equal(t, programstatus.Error, status.State)
+
+		b.SetFocus(shown)
+		status, _ = b.TabStatus(uri)
+		require.Equal(t, programstatus.Error, status.State, "focusing its window out of focus is not seeing it")
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{ID: "x", State: programstatus.Done, Progress: -1}))
+		status, _ = b.TabStatus(uri)
+		require.Len(t, status.Records, 2, "reporting on the focus window out of focus is not seeing it")
+
+		b.OnFocusChange(true)
+		status, _ = b.TabStatus(uri)
+		assert.Equal(t, programstatus.Idle, status.State)
+		assert.Empty(t, status.Records)
+		require.NoError(t, other.Close())
+	})
+
+	t.Run("removing the tab drops the records", func(t *testing.T) {
+		require.True(t, b.RemoveTab(tab))
+		h := newTestHandler()
+		b.NewTab(uri, 'o', "chat", h, h)
+		status, ok := b.TabStatus(uri)
+		require.True(t, ok)
+		assert.Equal(t, programstatus.Idle, status.State)
+		assert.Empty(t, status.Records)
+	})
 }

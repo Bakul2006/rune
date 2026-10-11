@@ -34,6 +34,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/component/comptest"
 	"github.com/unstablebuild/rune-go-sdk/handler"
 	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/workspace"
 	"unstable.build/rune/internal/workspace/workspacetest"
@@ -296,7 +297,8 @@ func (n nopBrowser) OnTabExit(workspaceapi.URI) bool {
 	return false
 }
 
-func (n nopBrowser) SetTabActivity(workspaceapi.URI, bool) error { return nil }
+func (n nopBrowser) SetTabStatus(workspaceapi.URI, programstatus.Report) error { return nil }
+func (n nopBrowser) EndTabStatus(workspaceapi.URI) error                       { return nil }
 
 func (n nopBrowser) UpdateNotificationProgress(
 	id, message string, progress, total int64,

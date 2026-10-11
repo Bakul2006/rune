@@ -51,6 +51,7 @@ import (
 	hmarkdown "unstable.build/rune/internal/handler/markdown"
 	"unstable.build/rune/internal/ide/idelsp/languages"
 	"unstable.build/rune/internal/ide/syntax"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/text/cmdenv"
 	"unstable.build/rune/internal/text/streamload"
 	"unstable.build/rune/internal/workspace"
@@ -1648,18 +1649,26 @@ func (c *Component) OnTabExit(uri workspaceapi.URI) bool {
 	return c.comp.OnTabExit(uri)
 }
 
-// SetTabActivity satisfies browser.TabManager.
-func (c *Component) SetTabActivity(uri workspaceapi.URI, active bool) error {
-	if !c.comp.SetTabActivity(uri, active) {
-		return errors.New("set activity called on unknown tab")
+// SetTabStatus satisfies browser.TabManager.
+func (c *Component) SetTabStatus(uri workspaceapi.URI, report programstatus.Report) error {
+	if !c.comp.SetTabStatus(uri, report) {
+		return errors.New("set status called on unknown tab")
 	}
 	return nil
 }
 
-// HasActiveTabs reports whether any tab of this Component is marked
-// active via SetTabActivity.
-func (c *Component) HasActiveTabs() bool {
-	return c.comp.HasActiveTabs()
+// EndTabStatus satisfies browser.TabManager.
+func (c *Component) EndTabStatus(uri workspaceapi.URI) error {
+	if !c.comp.EndTabStatus(uri) {
+		return errors.New("end status called on unknown tab")
+	}
+	return nil
+}
+
+// HasWorkingTabs reports whether any tab of this Component reported
+// working via SetTabStatus.
+func (c *Component) HasWorkingTabs() bool {
+	return c.comp.HasWorkingTabs()
 }
 
 // Prompt creates a new prompt to be drawn as an overlay on the next call to Draw
