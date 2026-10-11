@@ -96,7 +96,11 @@ A TypeScript file that no `tsconfig.json` includes is checked as an
 and no packages' types, such as `@types/node`. Unlike Go, Rust, and
 Zig, such a file still gets code intelligence. Rune tells you once per
 server when you open one, so its unresolved imports do not come as a
-surprise. Add a `tsconfig.json` that includes it to fix them.
+surprise. An inferred project holds only the files you have open and
+the files they import, so find references and rename miss callers in
+files that are closed: references to a helper list only its
+declaration until you open a file that calls it. Add a `tsconfig.json`
+that includes the files to fix both.
 
 Working across several projects in one repository? See the
 [Monorepos](./monorepo.md) guide.

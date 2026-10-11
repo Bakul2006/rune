@@ -47,7 +47,8 @@ crate or the Python worker into that server's view.
 TypeScript and JavaScript differ within their own projects: one server
 serves every `tsconfig.json` below its root, so Rune roots it at the
 outermost folder with a marker. The packages of a JavaScript workspace
-share that server, and find references and rename cross between them.
+share that server, and find references and rename cross between the
+packages it has loaded.
 
 A source file with no marker in any folder between it and the workspace
 root gets no code intelligence, because there is no project to root a
@@ -57,7 +58,8 @@ appropriate manifest (`go mod init`, `cargo init`, or a
 `pyproject.toml`) at the project root and reopen the file.
 TypeScript and JavaScript are the exception: their language server
 checks a file with no project as an inferred project, so such a file is
-served from the workspace root.
+served from the workspace root. Find references and rename in an
+inferred project only search open files and the files they import.
 
 ## Search and navigation scale with the repo
 

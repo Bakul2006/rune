@@ -522,13 +522,57 @@ func TestE2EProjectNotices(t *testing.T) {
 		waitForProject(t, env, mainPath, "add(", "add")
 		env.editor.open(t, filepath.Join(env.dir, "scripts", "loose.ts"))
 		want := "scripts/loose.ts is in no tsconfig.json's project, so TypeScript checks it with default " +
-			"options, without path aliases or packages' types such as @types/node. " +
+			"options, without path aliases or packages' types such as @types/node, and finds " +
+			"references and renames only in open files and the files they import. " +
 			"Add a tsconfig.json that includes it."
 		require.Eventually(t, func() bool { return slices.Contains(env.notify.messages(), want) },
 			60*time.Second, 200*time.Millisecond, "notifications: %v", env.notify.messages())
 		for _, m := range env.notify.messages() {
 			assert.NotContains(t, m, "main.ts", "main.ts is in app/tsconfig.json's project")
 		}
+	})
+}
+
+func TestE2EInferredProjectReferences(t *testing.T) {
+	t.Parallel()
+	tsgo := findTsgo(t)
+	env := startTSExtension(t, setupTSWorkspace(t, "inferred"),
+		stubConfig{strings: map[string]string{"lsp_path": tsgo}})
+	exitPath, handlerPath := filepath.Join(env.dir, "exit.ts"), filepath.Join(env.dir, "handler.ts")
+	exitURI, handlerURI := "file://"+exitPath, "file://"+handlerPath
+	decl := locateInFile(t, exitPath, "export function cliOk", "cliOk")
+	references := func(t *testing.T) []string {
+		t.Helper()
+		locs, err := env.mgr.References(t.Context(), semanticapi.ReferenceParams{
+			TextDocument: semanticapi.TextDocumentIdentifier{URI: exitURI},
+			Position:     decl,
+			Context:      semanticapi.ReferenceContext{IncludeDeclaration: true},
+		})
+		require.NoError(t, err)
+		var uris []string
+		for _, l := range locs {
+			uris = append(uris, l.URI)
+		}
+		return uris
+	}
+
+	env.editor.open(t, exitPath)
+	waitForProject(t, env, exitPath, "export function cliOk", "cliOk")
+	// With no tsconfig.json, tsgo's inferred project holds only the open
+	// files and what they import, so a closed caller is not searched.
+	t.Run("a closed caller is not found", func(t *testing.T) {
+		uris := references(t)
+		assert.Contains(t, uris, exitURI)
+		assert.NotContains(t, uris, handlerURI)
+	})
+
+	env.editor.open(t, handlerPath)
+	t.Run("an open caller is found", func(t *testing.T) {
+		// tsgo adds the opened file to its inferred project asynchronously.
+		require.Eventually(t, func() bool {
+			uris := references(t)
+			return slices.Contains(uris, exitURI) && slices.Contains(uris, handlerURI)
+		}, 60*time.Second, 200*time.Millisecond)
 	})
 }
 

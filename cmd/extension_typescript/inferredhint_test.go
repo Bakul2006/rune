@@ -30,7 +30,8 @@ import (
 )
 
 const inferredHint = "%s is in no tsconfig.json's project, so TypeScript checks it with default " +
-	"options, without path aliases or packages' types such as @types/node. " +
+	"options, without path aliases or packages' types such as @types/node, and finds " +
+	"references and renames only in open files and the files they import. " +
 	"Add a tsconfig.json that includes it."
 
 func openInferredHint(t *testing.T, h *inferredProjectHint, path string) {

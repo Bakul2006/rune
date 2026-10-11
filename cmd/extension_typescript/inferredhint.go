@@ -50,7 +50,9 @@ var tsSourceExtensions = []string{".ts", ".tsx", ".mts", ".cts"}
 // TypeScript file they opened is in no tsconfig.json's project. tsgo
 // checks such a file with default options, which have no path aliases
 // and load no packages' types, so imports the project's own build
-// resolves may not resolve in the editor.
+// resolves may not resolve in the editor. Its inferred project holds
+// only the open files and their imports, so find references and rename
+// miss callers in closed files.
 type inferredProjectHint struct {
 	// baseCtx outlives the per-event context, which the editor cancels
 	// as soon as Handle returns.
@@ -111,7 +113,8 @@ func (h *inferredProjectHint) check(uri workspaceapi.URI, root string) {
 				rel, _ := filepath.Rel(h.wsURI.Path(), uri.Path())
 				_, _ = h.notify.NotifyOnce(browserapi.LevelInfo,
 					"%s is in no tsconfig.json's project, so TypeScript checks it with default "+
-						"options, without path aliases or packages' types such as @types/node. "+
+						"options, without path aliases or packages' types such as @types/node, and finds "+
+						"references and renames only in open files and the files they import. "+
 						"Add a tsconfig.json that includes it.", rel)
 			}
 			return
