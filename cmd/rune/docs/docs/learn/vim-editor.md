@@ -240,11 +240,13 @@ A leading `0` is the start-of-line motion, not part of a count.
 | `^` | cursor to first non-blank character of current line |
 | `$` | cursor to last character of current line |
 | `g_` | cursor to last non-blank character of current line |
+| `+` `-` | first non-blank of the next / previous line; `{n}+` `{n}-` move `n` lines |
+| `_` | first non-blank of the current line; `{n}_` of the line `n-1` lines down |
 | `H` | cursor to top of viewport; `{n}H` to row `n` from top |
-| `M` | cursor to middle line of viewport |
+| `M` | cursor to middle line of viewport, or of the text when it ends above the bottom |
 | `L` | cursor to bottom of viewport; `{n}L` to row `n` from bottom |
-| `gj` | one display line down (next wrapped row, same screen column) |
-| `gk` | one display line up (previous wrapped row, same screen column) |
+| `gj` | one display line down (next wrapped row, same screen column); `j` without wrapping |
+| `gk` | one display line up (previous wrapped row, same screen column); `k` without wrapping |
 
 ### Word
 
@@ -413,6 +415,13 @@ current line.
 
 Operators also accept `/{pat}`, `?{pat}`, `'{mark}`, `` `{mark} `` as
 motions.
+
+As in Vim, an operator covers the text a motion moves over by the motion's
+kind (`:h exclusive`, `:h linewise`). Line motions such as `j`, `gg`, `G`,
+`+` and `H` cover whole lines, including when they land on the cursor's own
+line, so `dG` on the last line deletes it. A yank leaves the cursor at the
+start of what it copied, so `yk` and `yb` move the cursor back. Case changes
+and shifts never write to a register.
 
 ## Text objects
 
