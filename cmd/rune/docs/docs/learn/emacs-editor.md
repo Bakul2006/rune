@@ -368,8 +368,8 @@ forward, and `<alt-t>` before the first word of the buffer does nothing.
 join, then inserts one space unless the join is at a buffer edge or directly
 beside a recognized bracket.
 
-Moving or duplicating lines uses Rune's shared clipboard internally, so either
-operation replaces its newest entry.
+Moving or duplicating lines leaves the kill ring alone. Duplicating down moves
+point to the copy.
 
 ### Killing and whitespace
 
@@ -533,6 +533,7 @@ repeat:
 | --- | --- |
 | `<ctrl-u><ctrl-space>` | jump to the most recent mark and pop it |
 | `<ctrl-u>N<ctrl-k>` | kill through N following newlines; zero kills to the line start; negative kills backward to preceding line ends |
+| `<ctrl-u>N<ctrl-shift-backspace>` | kill N whole lines; zero kills the line's text; negative kills the line and the lines above it |
 | `<ctrl-u><ctrl-y>` | yank, leaving point before the inserted text |
 | `<ctrl-u>N<ctrl-y>` | yank the Nth most recent clipboard entry |
 | `<ctrl-u>N<alt-y>` | rotate the last yank N entries back |
