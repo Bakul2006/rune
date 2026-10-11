@@ -40,7 +40,9 @@ motions and operators on this page work everywhere:
 ## Selections come first
 
 Every range is an **anchor** and a **head**, and it is never empty: in normal
-mode the caret is itself a one-cell selection. A motion in normal mode drops a
+mode the caret is itself a one-character selection, and that character can be
+a line ending. The one exception is the end of the document, after its last
+character, where the caret sits on an empty range. A motion in normal mode drops a
 fresh anchor and moves the head; in select mode (`v`) the anchor survives, so
 motions grow and flip the range.
 
@@ -70,7 +72,8 @@ The syntax-tree sibling and parent motions (`A-n`, `A-p`, `A-e`, `A-b`,
 | Replace | `r` | any key (one shot) |
 
 Most operators drop select mode when they run, as Helix does. `J`, `A-J` and
-`=` deliberately keep it.
+`=` deliberately keep it. `p` and `P` drop it too, but they leave the selection
+on the text it covered rather than on the pasted text.
 
 ## Counts
 
@@ -83,7 +86,7 @@ Type digits before a motion or operator to repeat it: `3w` walks three words,
 
 | Key | Motion |
 | --- | --- |
-| `h` `l` / `<left>` `<right>` | Left / right one cell |
+| `h` `l` / `<left>` `<right>` | Left / right one character, crossing line endings |
 | `j` `k` / `<down>` `<up>` | Down / up one line |
 | `<home>` / `g h` | Line start |
 | `<end>` / `g l` | Line end |
@@ -299,9 +302,9 @@ An operator acts on the current selection.
 | `d` / `A-d` | Delete, with / without yanking |
 | `c` / `A-c` | Change, with / without yanking |
 | `y` | Yank |
-| `p` / `P` | Paste after / before the selection |
+| `p` / `P` | Paste after / before the selection. Lines pasted below an unterminated last line run on from its end |
 | `R` | Replace the selection with the register |
-| `r{char}` | Replace every character in the selection |
+| `r{char}` | Replace every character in the selection, line endings included |
 | `~` | Toggle case |
 | `` ` `` / ``A-` `` | Lowercase / uppercase |
 | `J` / `A-J` | Join lines / join and select the separator |

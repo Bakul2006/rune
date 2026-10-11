@@ -202,12 +202,15 @@ func TestSetCursorAtScroll(t *testing.T) {
 			at: term.Coordinates{Y: -5}, want: term.Coordinates{}},
 		{name: "clamps a row past the end", content: "abc\ndef",
 			at: term.Coordinates{Y: 99}, want: term.Coordinates{Y: 1}},
-		// The caret shows a position past the last cell on that cell,
-		// as it does for any selection ending on a line ending.
+		// A position past the last cell lands on the line ending, or on
+		// the end of the document on the last row, as Helix's
+		// pos_at_coords does when limited to the line.
 		{name: "clamps a column past the end", content: "abc",
-			at: term.Coordinates{X: 99}, want: term.Coordinates{X: 2}},
+			at: term.Coordinates{X: 99}, want: term.Coordinates{X: 3}},
 		{name: "clamps both", content: "ab\ncd",
-			at: term.Coordinates{X: 99, Y: 99}, want: term.Coordinates{X: 1, Y: 1}},
+			at: term.Coordinates{X: 99, Y: 99}, want: term.Coordinates{X: 2, Y: 1}},
+		{name: "clamps a column onto a line ending", content: "ab\ncd",
+			at: term.Coordinates{X: 99}, want: term.Coordinates{X: 2}},
 		{name: "an empty line pins column zero", content: "a\n\nb",
 			at: term.Coordinates{X: 4, Y: 1}, want: term.Coordinates{Y: 1}},
 	} {
