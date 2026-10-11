@@ -804,7 +804,7 @@ func TestResponsesStreamSkipsSSEBlocksWithoutData(t *testing.T) {
 		delta     = `data: {"type":"response.output_text.delta","delta":"hi","content_index":0,"item_id":"item_0","output_index":0,"sequence_number":1}` + "\n\n"
 		completed = `data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}` + "\n\n"
 	)
-	tests := []struct {
+	bodies := []struct {
 		name string
 		body string
 	}{
@@ -815,43 +815,57 @@ func TestResponsesStreamSkipsSSEBlocksWithoutData(t *testing.T) {
 		{"empty data field", "data:\n\n" + delta + completed},
 		{"crlf keepalive", ": keepalive\r\n\r\n" + delta + completed},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-				w.WriteHeader(http.StatusOK)
-				_, _ = io.WriteString(w, tt.body)
-			}))
-			t.Cleanup(srv.Close)
+	// The ChatGPT Codex backend streams without any Content-Type header.
+	contentTypes := []struct {
+		name  string
+		value string
+	}{
+		{"event-stream content type", "text/event-stream; charset=utf-8"},
+		{"no content type", ""},
+	}
+	for _, ct := range contentTypes {
+		for _, tt := range bodies {
+			t.Run(ct.name+"/"+tt.name, func(t *testing.T) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					if ct.value == "" {
+						w.Header()["Content-Type"] = nil
+					} else {
+						w.Header().Set("Content-Type", ct.value)
+					}
+					w.WriteHeader(http.StatusOK)
+					_, _ = io.WriteString(w, tt.body)
+				}))
+				t.Cleanup(srv.Close)
 
-			c := NewClient("test-key", Config{BaseURL: srv.URL, ForceResponsesAPI: true})
-			ctx := context.Background()
-			it, err := c.CreateCompletion(ctx, llmapi.ModelEntry{Name: GPT5Dot3Codex, ContextWindow: 200000}, llmapi.Request{
-				Messages: []llmapi.Message{{Role: llmapi.RoleUser, Content: "hi"}},
+				c := NewClient("test-key", Config{BaseURL: srv.URL, ForceResponsesAPI: true})
+				ctx := context.Background()
+				it, err := c.CreateCompletion(ctx, llmapi.ModelEntry{Name: GPT5Dot3Codex, ContextWindow: 200000}, llmapi.Request{
+					Messages: []llmapi.Message{{Role: llmapi.RoleUser, Content: "hi"}},
+				})
+				require.NoError(t, err)
+				defer func() { _ = it.Close() }()
+
+				var text strings.Builder
+				var doneData *llmapi.DoneData
+				for {
+					ev, ok := it.Next(ctx)
+					if !ok {
+						break
+					}
+					switch ev.Type {
+					case llmapi.EventTextDelta:
+						text.WriteString(ev.Text)
+					case llmapi.EventStreamDone:
+						doneData = ev.DoneData
+					case llmapi.EventStreamError:
+						t.Fatalf("stream error: %v", ev.Error)
+					}
+				}
+				require.NoError(t, it.Err())
+				require.NotNil(t, doneData)
+				assert.Equal(t, "hi", text.String())
 			})
-			require.NoError(t, err)
-			defer func() { _ = it.Close() }()
-
-			var text strings.Builder
-			var doneData *llmapi.DoneData
-			for {
-				ev, ok := it.Next(ctx)
-				if !ok {
-					break
-				}
-				switch ev.Type {
-				case llmapi.EventTextDelta:
-					text.WriteString(ev.Text)
-				case llmapi.EventStreamDone:
-					doneData = ev.DoneData
-				case llmapi.EventStreamError:
-					t.Fatalf("stream error: %v", ev.Error)
-				}
-			}
-			require.NoError(t, it.Err())
-			require.NotNil(t, doneData)
-			assert.Equal(t, "hi", text.String())
-		})
+		}
 	}
 }
 

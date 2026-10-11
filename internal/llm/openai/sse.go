@@ -39,10 +39,26 @@ func sseDataOnlyMiddleware(req *http.Request, next option.MiddlewareNext) (*http
 	if err != nil || resp == nil || resp.Body == nil {
 		return resp, err
 	}
-	if mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type")); mediaType == "text/event-stream" {
+	if isEventStream(resp) {
 		resp.Body = &sseDataOnlyBody{rc: resp.Body, r: bufio.NewReader(resp.Body)}
 	}
 	return resp, nil
+}
+
+// isEventStream reports whether resp carries a server-sent-event stream.
+//
+// The ChatGPT Codex backend omits Content-Type on its streaming responses
+// entirely, so the header alone cannot be trusted. Every request this client
+// issues is a streaming completion, which makes any successful response an
+// event stream; error responses are excluded because openai-go reads their
+// body as a JSON error document that must reach it unfiltered.
+func isEventStream(resp *http.Response) bool {
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		return resp.StatusCode >= 200 && resp.StatusCode < 300
+	}
+	mediaType, _, _ := mime.ParseMediaType(contentType)
+	return mediaType == "text/event-stream"
 }
 
 type sseDataOnlyBody struct {
