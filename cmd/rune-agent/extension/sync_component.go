@@ -21,9 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/llmapi"
-	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"unstable.build/rune/cmd/rune-agent/dialogue/dialoguetui"
 )
 
@@ -47,9 +45,9 @@ type syncComponent struct {
 	mu   *sync.Mutex
 	comp *dialoguetui.Component
 	h    *aiEditorHandler
-	// uri identifies the chat's tab, whose activity follows the turn.
-	// It is zero for chats that are not tabs, such as queries.
-	uri workspaceapi.URI
+	// tab reports the turn as the status of the chat's tab. It must
+	// not be used while mu is held.
+	tab *tabStatusReporter
 }
 
 // completionOpen reports whether the chat's '#' completion band is
@@ -91,34 +89,18 @@ func (s syncComponent) beginTurn(start time.Time) {
 		st.TurnStart = start
 		st.Usage = llmapi.DialogueUsage{}
 	})
-	s.setTabStatus(browserapi.TabWorking)
+	s.tab.beginTurn()
 }
 
 // endTurn returns the bar to idle, keeping whatever the turn reported
-// so its result stays readable until the next one starts.
+// so its result stays readable until the next one starts. The tab's
+// status is left to the turn's outcome.
 func (s syncComponent) endTurn() {
 	s.setStatusBarState(func(st *dialoguetui.StatusBarState) {
 		st.Active = false
 		st.Phase = ""
 		st.ActiveForm = ""
 	})
-	s.setTabStatus(browserapi.TabIdle)
-}
-
-// setTabStatus reports state as the status of the chat's tab, and
-// nothing when the chat has no tab. It is best-effort: a failure loses
-// the indicator, never the turn. It must be called without mu held:
-// the host serves it under the UI lock it also holds while drawing
-// this chat.
-func (s syncComponent) setTabStatus(state browserapi.TabState) {
-	if s.uri == (workspaceapi.URI{}) {
-		return
-	}
-	status := browserapi.TabStatus{State: state, Progress: -1}
-	if err := s.h.wm.SetTabStatus(s.uri, status); err != nil {
-		slog.Debug("set chat tab status",
-			"uri", s.uri.String(), "state", state, "error", err)
-	}
 }
 
 // seedContextTokens fills the context gauge from a reopened

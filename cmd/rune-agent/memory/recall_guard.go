@@ -105,6 +105,7 @@ func (g *GuardedRecaller) Recall(
 	resp, err := prompter.Prompt(ctx, agent.PromptRequest{
 		Title:  "Allow memory recall?",
 		Header: "memory",
+		Kind:   agent.PromptKindPermission,
 		Body: "Rune Agent has compiled memories from past sessions in " +
 			"this workspace. Memories surface architecture decisions, " +
 			"user preferences, and episodic context that may be " +

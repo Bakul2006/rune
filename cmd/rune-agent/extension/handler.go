@@ -1421,7 +1421,7 @@ func (h *aiEditorHandler) newChat(
 		}
 	}
 	comp = dialoguetui.NewComponent(h.dialogueConfig(mu))
-	syncComp := syncComponent{mu: mu, comp: comp, h: h, uri: uri}
+	syncComp := syncComponent{mu: mu, comp: comp, h: h, tab: newTabStatusReporter(h.wm, uri, h.n)}
 
 	// Replay dialogue history.
 	pendingTools := make(map[string]llmapi.ToolCall)
@@ -1437,7 +1437,7 @@ func (h *aiEditorHandler) newChat(
 	)
 
 	// Build the agent registry now that tx is available for ask_user.
-	prompter := &tuiPrompter{tx: tx, noti: h.n, status: syncComp}
+	prompter := &tuiPrompter{tx: tx, chat: syncComp}
 	askUser := agentools.NewAskUser(prompter)
 	requestSkill := agentools.NewRequestSkill(prompter)
 	exitPlan := agentools.NewExitPlan(h.plansDir, prompter)
@@ -1461,7 +1461,7 @@ func (h *aiEditorHandler) newChat(
 	sessionTools := agentools.SessionTools(spawner, spawner.ListAgents(), childEvents, h.skillRegistry)
 	skillTool := agentools.NewSkillTool(h.skillRegistry, spawner, childEvents)
 	taskStore := taskstore.New()
-	progressUpdater := &tuiProgressUpdater{tx: tx}
+	progressUpdater := newTUIProgressUpdater(tx, syncComp.tab)
 	taskTools := agentools.NewTaskTools(taskStore, progressUpdater)
 	allTools := make([]agent.Tool, 0, len(baseTools)+len(sessionTools)+len(taskTools)+5)
 	allTools = append(allTools, baseTools...)
@@ -1538,7 +1538,7 @@ func (h *aiEditorHandler) newChat(
 
 	handler, msgRx := h.wrapDialogueHandler(ctx, syncComp, dhandler, rx, d.ID)
 	go debug.CapturePanicReport(func() {
-		createAgentCompletions(ctx, cancel, tx, msgRx, chatAgent, spawner, childEvents, h.skillRegistry, d.ID, syncComp, h.n,
+		createAgentCompletions(ctx, cancel, tx, msgRx, chatAgent, spawner, childEvents, h.skillRegistry, d.ID, syncComp,
 			makeOnCompacted(h.dialogueStore, adapter.compactFn),
 			h.dialogueStore)
 	})
@@ -1638,7 +1638,7 @@ func (h *aiEditorHandler) handleQuery(cmd textapi.Command) error {
 	msg := llmapi.Message{Content: query, Role: llmapi.RoleUser}
 	addMessage(comp, msg, nil)
 
-	syncComp := syncComponent{mu: mu, comp: comp, h: h}
+	syncComp := syncComponent{mu: mu, comp: comp, h: h, tab: newTabStatusReporter(h.wm, workspaceapi.URI{}, h.n)}
 
 	qrx := make(chan dialoguetui.SubmitMessage)
 	handler, msgRx := h.wrapDialogueHandler(ctx, syncComp, dhandler, qrx, "")
@@ -1674,7 +1674,7 @@ func (h *aiEditorHandler) handleQuery(cmd textapi.Command) error {
 	serviceFactory := func(model string) (llmapi.Service, llmapi.ModelEntry, error) {
 		return h.modelService(h.ctx, model)
 	}
-	prompter := &tuiPrompter{tx: tx, noti: h.n, status: syncComp}
+	prompter := &tuiPrompter{tx: tx, chat: syncComp}
 	spawner := agent.NewGoroutineSpawner(
 		h.dialogueStore, serviceFactory,
 		h.agentsConfig,
@@ -1691,7 +1691,7 @@ func (h *aiEditorHandler) handleQuery(cmd textapi.Command) error {
 
 	go debug.CapturePanicReport(func() {
 		createAgentCompletions(ctx, cancel, tx, msgRx,
-			h.queryAgent, spawner, childEvents, h.skillRegistry, queryID, syncComp, h.n, nil, h.dialogueStore)
+			h.queryAgent, spawner, childEvents, h.skillRegistry, queryID, syncComp, nil, h.dialogueStore)
 	})
 
 	var err error
@@ -2076,31 +2076,34 @@ const (
 	turnOutcomeError
 )
 
-func notifyTurnOutcome(noti browserapi.Notifications, outcome turnOutcome, reason string) {
-	var level browserapi.NotificationLevel
-	var msg string
+// reportTurnOutcome reports how the turn ended as the chat's status:
+// done, summarized by the reply; failed, with the reason; or withdrawn
+// when the user canceled it.
+func reportTurnOutcome(tab *tabStatusReporter, outcome turnOutcome, reason, reply string) {
 	switch outcome {
 	case turnOutcomeCompleted:
-		level = browserapi.LevelSuccess
-		msg = "Turn completed"
-	case turnOutcomeTruncated:
-		level = browserapi.LevelWarn
-		msg = "Turn stopped after reaching the token limit"
-	case turnOutcomeCanceled:
-		return
-	case turnOutcomeError:
-		level = browserapi.LevelError
-		if reason == "" {
-			msg = "Turn failed"
-		} else {
-			msg = fmt.Sprintf("Turn failed: %s", reason)
+		msg := replySummary(reply)
+		if msg == "" {
+			msg = statusMsgCompleted
 		}
-	default:
-		return
+		tab.done(msg)
+	case turnOutcomeTruncated:
+		tab.truncated()
+	case turnOutcomeCanceled:
+		tab.canceled()
+	case turnOutcomeError:
+		if reason == "" {
+			tab.failed(statusMsgFailed)
+		} else {
+			tab.failed(fmt.Sprintf("%s: %s", statusMsgFailed, reason))
+		}
 	}
-	if _, err := noti.Notify(level, "%s", msg); err != nil {
-		slog.Error("notify", "error", err)
-	}
+}
+
+// spawnsSubAgent reports whether the tool named name may run a
+// sub-agent whose events arrive as agent.ChildEvents of its call.
+func spawnsSubAgent(name string) bool {
+	return name == "agent" || name == "skill"
 }
 
 func outcomeAndReasonForFinishReason(reason llmapi.FinishReason) (turnOutcome, string) {
@@ -2209,7 +2212,6 @@ func createAgentCompletions(
 	skillRegistry *skills.SkillRegistry,
 	id string,
 	syncComp syncComponent,
-	noti browserapi.Notifications,
 	onCompacted func(dialogueID string),
 	parentStore dialoguemanager.Store,
 ) {
@@ -2233,6 +2235,8 @@ func createAgentCompletions(
 					var msg dialoguetui.MessageEvent
 					switch cev.Event.Type {
 					case agent.EventToolCall:
+						syncComp.tab.childToolCall(cev.ParentToolCallID,
+							cev.Event.ToolName, cev.Event.ToolSummary)
 						msg = dialoguetui.MessageEvent{
 							Type:             dialoguetui.MessageEventToolCall,
 							ToolCallID:       cev.Event.ToolCallID,
@@ -2335,6 +2339,7 @@ func createAgentCompletions(
 			case tx <- dialoguetui.MessageEvent{Type: dialoguetui.MessageEventBreak}:
 			case <-ctx.Done():
 			}
+			syncComp.tab.failed(reason)
 			endTurn()
 			continue
 		}
@@ -2375,7 +2380,7 @@ func createAgentCompletions(
 					case tx <- dialoguetui.MessageEvent{Type: dialoguetui.MessageEventBreak}:
 					case <-ctx.Done():
 					}
-					_, _ = noti.Notify(browserapi.LevelError, "skill %s: %v", skill.Name, skillErr)
+					syncComp.tab.failed(fmt.Sprintf("skill %s: %v", skill.Name, skillErr))
 					endTurn()
 					continue
 				}
@@ -2416,6 +2421,9 @@ func createAgentCompletions(
 			}()
 			outcome := turnOutcomeNone
 			outcomeReason := ""
+			// reply collects the text of the inference in progress, so
+			// that the turn's outcome can be summarized by its last one.
+			var reply strings.Builder
 			defer func() {
 				if outcome == turnOutcomeNone {
 					switch {
@@ -2424,7 +2432,7 @@ func createAgentCompletions(
 						outcomeReason = string(llmapi.FinishReasonNull)
 					}
 				}
-				notifyTurnOutcome(noti, outcome, outcomeReason)
+				reportTurnOutcome(syncComp.tab, outcome, outcomeReason, reply.String())
 			}()
 			for {
 				ev, ok := it.Next(req.ctx)
@@ -2440,10 +2448,14 @@ func createAgentCompletions(
 					}
 				case agent.EventInferenceStart:
 					setPhase(phaseSending)
+					syncComp.tab.setTitle(statusTitleSending)
+					reply.Reset()
 				case agent.EventInferenceReady:
 					setPhase(phaseThinking)
+					syncComp.tab.setTitle(statusTitleReasoning)
 				case agent.EventFirstContent:
 					setPhase(phaseReceiving)
+					syncComp.tab.setTitle(statusTitleWriting)
 				case agent.EventReasoning:
 					if ev.Reasoning == "" {
 						continue
@@ -2460,6 +2472,7 @@ func createAgentCompletions(
 					if ev.Text == "" {
 						continue
 					}
+					reply.WriteString(ev.Text)
 					select {
 					case tx <- dialoguetui.MessageEvent{
 						Type: dialoguetui.MessageEventText,
@@ -2470,7 +2483,12 @@ func createAgentCompletions(
 					}
 				case agent.EventToolsStart:
 					setPhase(phaseToolCalling)
+					syncComp.tab.setTitle(statusTitleTools)
 				case agent.EventToolCall:
+					syncComp.tab.setToolCall(ev.ToolName, ev.ToolSummary)
+					if spawnsSubAgent(ev.ToolName) {
+						syncComp.tab.childStart(ev.ToolCallID, ev.ToolSummary)
+					}
 					select {
 					case tx <- dialoguetui.MessageEvent{
 						Type:          dialoguetui.MessageEventToolCall,
@@ -2484,6 +2502,7 @@ func createAgentCompletions(
 						return
 					}
 				case agent.EventToolResult:
+					syncComp.tab.childEnd(ev.ToolCallID)
 					select {
 					case tx <- dialoguetui.MessageEvent{
 						Type:         dialoguetui.MessageEventToolResult,
@@ -2510,6 +2529,7 @@ func createAgentCompletions(
 				case agent.EventRateLimitWarning:
 					setPhase(phaseRateLimited)
 					if ev.RateLimit != nil {
+						syncComp.tab.notify(statusTitleRateLimit, ev.RateLimit.Message)
 						select {
 						case tx <- dialoguetui.MessageEvent{
 							Type: dialoguetui.MessageEventWarning,
@@ -2529,8 +2549,10 @@ func createAgentCompletions(
 					})
 				case agent.EventCompacting:
 					setPhase(phaseCompacting)
+					syncComp.tab.setTitle(statusTitleCompacting)
 				case agent.EventCompacted:
 					setPhase(phaseSending)
+					syncComp.tab.setTitle(statusTitleSending)
 					if onCompacted != nil {
 						onCompacted(id)
 					}

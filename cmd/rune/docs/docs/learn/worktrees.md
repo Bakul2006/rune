@@ -165,8 +165,13 @@ glance even before any notification, and `:inbox` lists every reported status
 across workspaces so you can jump to the one that needs you. (Tune the colors
 under `terminal.status`.)
 
-Rune's own permission prompts, raised when an extension asks for something it
-was not granted, show as blocked on the workspace bar until you answer them.
+Rune Agent chats report their status this way: the chat tab spins while the
+agent thinks and runs tools, fills up as the tasks it planned complete, turns
+blocked when it asks you a question or for permission, and turns done with the
+first line of its reply, or failed with the reason, when the turn ends. Sub-agents
+and skills it spawns are listed beneath it in `:inbox`. Rune's own permission
+prompts, raised when an extension asks for something it was not granted, show
+as blocked on the workspace bar until you answer them.
 
 This works no matter where the notification comes from:
 

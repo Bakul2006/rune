@@ -62,13 +62,9 @@ type recordingWindowManager struct {
 	setContentCalls int
 
 	statusMu  sync.Mutex
-	statuses  []tabStatus
+	statusURI workspaceapi.URI
+	statuses  []browserapi.TabStatus
 	statusErr error
-}
-
-type tabStatus struct {
-	uri   workspaceapi.URI
-	state browserapi.TabState
 }
 
 func (m *recordingWindowManager) Focus() (browserapi.Window, error) { return nil, nil }
@@ -101,14 +97,21 @@ func (m *recordingWindowManager) CloseWindow(_ browserapi.Window) error { return
 func (m *recordingWindowManager) SetTabStatus(uri workspaceapi.URI, status browserapi.TabStatus) error {
 	m.statusMu.Lock()
 	defer m.statusMu.Unlock()
-	m.statuses = append(m.statuses, tabStatus{uri: uri, state: status.State})
+	m.statusURI = uri
+	m.statuses = append(m.statuses, status)
 	return m.statusErr
 }
 
-func (m *recordingWindowManager) tabStatuses() []tabStatus {
+func (m *recordingWindowManager) tabStatuses() []browserapi.TabStatus {
 	m.statusMu.Lock()
 	defer m.statusMu.Unlock()
 	return slices.Clone(m.statuses)
+}
+
+func (m *recordingWindowManager) reset() {
+	m.statusMu.Lock()
+	defer m.statusMu.Unlock()
+	m.statuses = nil
 }
 
 // stubNotifications is a no-op browserapi.Notifications. wrapDialogueHandler
@@ -383,9 +386,9 @@ func newPromptHandler(t *testing.T, opts promptHandlerOpts) tui.Handler {
 	dhandler, tx, rx := dialoguetui.Handler(ctx, mu, comp, interrupter)
 
 	owner := &aiEditorHandler{n: stubNotifications{}, p: interrupter}
-	syncComp := syncComponent{mu: mu, comp: comp, h: owner}
+	syncComp := syncComponent{mu: mu, comp: comp, h: owner, tab: newTabStatusReporter(owner.wm, workspaceapi.URI{}, owner.n)}
 
-	prompter := &tuiPrompter{tx: tx, noti: stubNotifications{}, status: syncComp}
+	prompter := &tuiPrompter{tx: tx, chat: syncComp}
 	askUser := agentools.NewAskUser(prompter)
 	registry := agent.NewRegistry(askUser)
 	skillReg := skills.NewRegistry(nopFileSystem{}, dirURI(""), nil, nil)
@@ -571,7 +574,7 @@ func agentE2EHandler(t *testing.T, svc *llmtest.Service, workspaceDir string, ls
 	})
 
 	owner := &aiEditorHandler{n: stubNotifications{}, p: interrupter}
-	syncComp := syncComponent{mu: mu, comp: comp, h: owner}
+	syncComp := syncComponent{mu: mu, comp: comp, h: owner, tab: newTabStatusReporter(owner.wm, workspaceapi.URI{}, owner.n)}
 	wrapped, msgRx := owner.wrapDialogueHandler(ctx, syncComp, dhandler, rx, "e2e-fixture")
 
 	var wg sync.WaitGroup
@@ -663,13 +666,13 @@ func stopReasonE2EHandler(t *testing.T, svc *llmtest.Service) tui.Handler {
 	})
 
 	owner := &aiEditorHandler{n: stubNotifications{}, p: interrupter}
-	syncComp := syncComponent{mu: mu, comp: comp, h: owner}
+	syncComp := syncComponent{mu: mu, comp: comp, h: owner, tab: newTabStatusReporter(owner.wm, workspaceapi.URI{}, owner.n)}
 	wrapped, msgRx := owner.wrapDialogueHandler(ctx, syncComp, dhandler, rx, "e2e-fixture")
 
 	childEvents := make(chan agent.ChildEvent)
 	go debug.CapturePanicReport(func() {
 		createAgentCompletions(ctx, cancel, tx, msgRx, ag, nopSpawner{},
-			childEvents, skillReg, dialogueID, syncComp, stubNotifications{}, nil, store)
+			childEvents, skillReg, dialogueID, syncComp, nil, store)
 	})
 
 	t.Cleanup(cancel)
@@ -768,12 +771,12 @@ func subAgentSpawnE2EHandler(
 	})
 
 	owner := &aiEditorHandler{n: stubNotifications{}, p: interrupter}
-	syncComp := syncComponent{mu: mu, comp: comp, h: owner}
+	syncComp := syncComponent{mu: mu, comp: comp, h: owner, tab: newTabStatusReporter(owner.wm, workspaceapi.URI{}, owner.n)}
 	wrapped, msgRx := owner.wrapDialogueHandler(ctx, syncComp, dhandler, rx, "e2e-fixture")
 
 	go debug.CapturePanicReport(func() {
 		createAgentCompletions(ctx, cancel, tx, msgRx, ag, spawner,
-			childEvents, skillReg, dialogueID, syncComp, stubNotifications{}, nil, store)
+			childEvents, skillReg, dialogueID, syncComp, nil, store)
 	})
 
 	t.Cleanup(cancel)
@@ -825,7 +828,7 @@ func maxTokensE2EHandler(t *testing.T, model llmapi.ModelEntry) (tui.Handler, *a
 	)
 
 	owner := &aiEditorHandler{n: stubNotifications{}, p: interrupter}
-	syncComp := syncComponent{mu: mu, comp: comp, h: owner}
+	syncComp := syncComponent{mu: mu, comp: comp, h: owner, tab: newTabStatusReporter(owner.wm, workspaceapi.URI{}, owner.n)}
 	wrapped, _ := owner.wrapDialogueHandler(ctx, syncComp, dhandler, rx, "e2e-fixture")
 
 	t.Cleanup(cancel)

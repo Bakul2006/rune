@@ -161,7 +161,7 @@ func TestHandleChatTracksTabURIForActivity(t *testing.T) {
 
 	v, ok := h.openChats.Load(dialogueID)
 	require.True(t, ok)
-	assert.Equal(t, wm.gotURI, v.(syncComponent).uri)
+	assert.Equal(t, wm.gotURI, v.(syncComponent).tab.uri)
 }
 
 func TestOpenResourceResumesChat(t *testing.T) {
@@ -252,7 +252,7 @@ func TestOpenResourceResumesChat(t *testing.T) {
 			assert.Zero(t, wm.setContentCalls, "placement is the host's")
 			v, ok := h.openChats.Load(dialogueID)
 			require.True(t, ok)
-			assert.Equal(t, uri, v.(syncComponent).uri,
+			assert.Equal(t, uri, v.(syncComponent).tab.uri,
 				"the chat must go by the URI the host asked for, whatever the model")
 			a, ok := h.openChatAgents.Load(dialogueID)
 			require.True(t, ok)
@@ -1102,8 +1102,8 @@ func TestPlanSkillSpawnInheritsQualifiedModel(t *testing.T) {
 		defer close(done)
 		createAgentCompletions(ctx, cancel, tx, rx, ag, spawner,
 			childEvents, skillReg, dialogueID,
-			syncComponent{mu: new(sync.Mutex), comp: dialoguetui.NewComponent(dialoguetui.ComponentConfig{}), h: &aiEditorHandler{n: stubNotifications{}, p: term.NopInterrupter()}},
-			stubNotifications{}, nil, store)
+			newStatusBarSyncComponent(),
+			nil, store)
 	}()
 
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
