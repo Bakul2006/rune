@@ -215,6 +215,8 @@ type Component struct {
 
 	// collapse mode for tool turns
 	collapseMode       collapseMode
+	hoveredToolTurn    *Turn
+	hoveredTool        *toolNode
 	toggleAnchor       component.ListNode
 	toggleAnchorOffset int
 	toggleAnchorValid  bool
@@ -656,6 +658,54 @@ func (c *Component) SentAttachmentAt(pos term.Coordinates) (Attachment, bool) {
 		}
 	}
 	return Attachment{}, false
+}
+
+// ToolCallAt resolves a messages-relative viewport coordinate to the
+// invocation displayed there, including nested calls and result leaves.
+func (c *Component) ToolCallAt(pos term.Coordinates) (ToolCallDetails, bool) {
+	_, tn := c.toolAt(pos)
+	if tn == nil {
+		return ToolCallDetails{}, false
+	}
+	return tn.details(), true
+}
+
+// HoverToolCall changes the hovered tool row, clearing the previous row
+// when the pointer moves to another message or outside the viewport.
+func (c *Component) HoverToolCall(pos term.Coordinates) (changed bool) {
+	turn, tn := c.toolAt(pos)
+	if turn == c.hoveredToolTurn && tn == c.hoveredTool {
+		return false
+	}
+	if c.hoveredToolTurn != nil {
+		changed = c.hoveredToolTurn.setHovered(nil)
+	}
+	c.hoveredToolTurn, c.hoveredTool = turn, tn
+	if turn != nil && turn.setHovered(tn) {
+		changed = true
+	}
+	return
+}
+
+func (c *Component) toolAt(pos term.Coordinates) (*Turn, *toolNode) {
+	width, height := c.messages.SizeWidth(), c.messages.SizeHeight()
+	if pos.X < 0 || pos.X >= width || pos.Y < 0 || pos.Y >= height {
+		return nil, nil
+	}
+	pos.Y += c.messages.MaxOffset() - c.messages.Offset()
+	y := 0
+	for node, ok := c.messages.Front(); ok; node, ok = node.Next() {
+		v := node.Value().(component.Responsive)
+		h := v.Height(width)
+		if pos.Y >= y && pos.Y < y+h {
+			if turn, ok := v.(*Turn); ok {
+				return turn, turn.toolNodeAt(term.Coordinates{X: pos.X, Y: pos.Y - y})
+			}
+			break
+		}
+		y += h
+	}
+	return nil, nil
 }
 
 // HoverSentAttachment highlights the sent-message chip at pos, clearing
@@ -1623,6 +1673,8 @@ func (c *Component) resetContent() {
 	c.closeAllTurns()
 	c.currentTurn = nil
 	c.turnNode = nil
+	c.hoveredToolTurn = nil
+	c.hoveredTool = nil
 	c.breakReasoning()
 	c.reasoningEntries = nil
 	c.reasoningStreamComp = nil

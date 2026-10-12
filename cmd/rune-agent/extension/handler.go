@@ -1433,6 +1433,7 @@ func (h *aiEditorHandler) newChat(
 		dialoguetui.WithCommands(adapter),
 		dialoguetui.WithContextCompleter(newContextCompleter(h.fs, h.parser)),
 		dialoguetui.WithAttachmentOpener(attachmentPreviewer{h}),
+		dialoguetui.WithToolCallOpener(newToolCallPreviewer(h)),
 		dialoguetui.WithCloseFunc(cancel),
 	)
 

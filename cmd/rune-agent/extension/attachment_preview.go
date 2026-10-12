@@ -17,6 +17,7 @@
 package extension
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -24,10 +25,12 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/llmapi"
 	"github.com/unstablebuild/rune-go-sdk/component"
+	"github.com/unstablebuild/rune-go-sdk/handler"
 	"unstable.build/rune/cmd/rune-agent/agent"
 	"unstable.build/rune/cmd/rune-agent/agent/agentools"
 	"unstable.build/rune/cmd/rune-agent/agent/utf8validate"
@@ -240,7 +243,7 @@ func (h *aiEditorHandler) openAttachmentPreview(a dialoguetui.Attachment) {
 		if content == "" {
 			content = h.symbolContext(h.ctx, a.Symbol)
 		}
-		err = h.openSymbolPreview(content)
+		_, err = h.openMarkdownPreview(content, nil)
 	} else {
 		err = h.openFileAttachment(a.Path)
 	}
@@ -273,28 +276,146 @@ func (h *aiEditorHandler) openFileAttachment(path string) error {
 	return nil
 }
 
-// openSymbolPreview floats the symbol's definition, references and
-// documentation. The context is markdown, so it is rendered by the
-// markdown handler to keep links, folds and code highlighting.
-func (h *aiEditorHandler) openSymbolPreview(content string) error {
+// openMarkdownPreview floats markdown content, such as a symbol's
+// definition, references and documentation, rendered by the markdown
+// handler to keep links, folds and code highlighting. onClose, if not nil,
+// is called with the returned window once it closes, however it is closed.
+func (h *aiEditorHandler) openMarkdownPreview(
+	content string, onClose func(browserapi.Window),
+) (browserapi.Window, error) {
 	cfg := defaultMarkdownConfig()
 	cfg.Parser = h.parser
 	md, err := markdown.NewWithConfig(content, *cfg)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	mdh := mdhandler.New(md)
+	// Keep a margin around rendered content without breaking the markdown
+	// handler's mouse coordinates, selection, or scrolling.
+	padded := newPreviewSpan(mdh)
 	var win browserapi.Window
-	bhandler := browserapi.FuncHandler(mdh, func() error {
+	bhandler := browserapi.FuncHandler(padded, func() error {
+		if onClose != nil {
+			onClose(win)
+		}
 		return h.wm.CloseWindow(win)
 	})
 	floating := browserapi.FuncFloating(bhandler, func() (int, int) {
-		return floatingWidth, min(mdh.Height(floatingWidth), floatingHeight)
+		return floatingWidth, min(padded.Height(floatingWidth), floatingHeight)
 	})
 	win, err = h.wm.Floating(floating, browserapi.FloatingConfig{
 		Alignment: component.AlignmentCentered,
 	})
-	return err
+	return win, err
+}
+
+func newPreviewSpan(mdh *mdhandler.Handler) *handler.Span {
+	return handler.NewSpan(mdh, component.SpanConfig{
+		PadHorizontal:    2,
+		ContentAlignment: component.AlignmentHorizontallyCentered,
+	})
+}
+
+// toolCallPreviewer opens a read-only view of a tool's original arguments
+// and full output, independent of transcript truncation. A tool call has
+// at most one preview: opening it again replaces the open one, which both
+// refocuses it and refreshes a response that was still running.
+type toolCallPreviewer struct {
+	h *aiEditorHandler
+
+	mu   sync.Mutex
+	open map[dialoguetui.ToolCallKey]browserapi.Window
+}
+
+func newToolCallPreviewer(h *aiEditorHandler) *toolCallPreviewer {
+	return &toolCallPreviewer{
+		h:    h,
+		open: make(map[dialoguetui.ToolCallKey]browserapi.Window),
+	}
+}
+
+func (p *toolCallPreviewer) OpenToolCall(details dialoguetui.ToolCallDetails) {
+	p.mu.Lock()
+	prev, ok := p.open[details.Key]
+	p.mu.Unlock()
+	if ok {
+		if err := p.h.wm.CloseWindow(prev); err != nil {
+			_, _ = p.h.n.Notify(browserapi.LevelError,
+				"preview %s: %v", details.Name, err)
+			return
+		}
+	}
+	win, err := p.h.openMarkdownPreview(toolCallPreviewMarkdown(details),
+		func(closed browserapi.Window) {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			// A replaced window reports its close asynchronously, possibly
+			// after its replacement is already tracked.
+			if p.open[details.Key] == closed {
+				delete(p.open, details.Key)
+			}
+		})
+	if err != nil {
+		_, _ = p.h.n.Notify(browserapi.LevelError,
+			"preview %s: %v", details.Name, err)
+		return
+	}
+	p.mu.Lock()
+	p.open[details.Key] = win
+	p.mu.Unlock()
+}
+
+func toolCallPreviewMarkdown(details dialoguetui.ToolCallDetails) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n\n", details.Name)
+	if details.Summary != "" {
+		fmt.Fprintf(&b, "%s\n\n", details.Summary)
+	}
+	if details.Args != "" {
+		args := details.Args
+		if json.Valid([]byte(args)) {
+			var formatted bytes.Buffer
+			if json.Indent(&formatted, []byte(args), "", "  ") == nil {
+				args = formatted.String()
+			}
+		}
+		b.WriteString("## Arguments\n\n")
+		writePreviewCode(&b, "json", args)
+	}
+	if details.Output != "" {
+		if details.IsError {
+			b.WriteString("## Error\n\n")
+		} else {
+			b.WriteString("## Result\n\n")
+		}
+		if details.MarkdownOutput && !details.IsError {
+			b.WriteString(details.Output)
+			b.WriteByte('\n')
+		} else {
+			language := "text"
+			if json.Valid([]byte(details.Output)) {
+				language = "json"
+			}
+			writePreviewCode(&b, language, details.Output)
+		}
+	} else if !details.Done {
+		b.WriteString("_Waiting for result…_\n")
+	} else if details.IsError {
+		b.WriteString("## Error\n\n_(no output)_\n")
+	} else {
+		b.WriteString("## Result\n\n_(no output)_\n")
+	}
+	return b.String()
+}
+
+func writePreviewCode(b *strings.Builder, language, text string) {
+	// A longer fence keeps arbitrary tool output (including markdown fences)
+	// literal, rather than turning part of it into markdown prose.
+	fence := "````"
+	for strings.Contains(text, fence) {
+		fence += "`"
+	}
+	fmt.Fprintf(b, "%s%s\n%s\n%s\n\n", fence, language, text, fence)
 }
 
 // replayedAttachments rebuilds the chip grid for a stored user message.

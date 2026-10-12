@@ -95,6 +95,16 @@ func WithAttachmentOpener(o AttachmentOpener) HandlerOption {
 	return func(dh *dialogueHandler) { dh.attachmentOpener = o }
 }
 
+// ToolCallOpener displays the full invocation and response for a clicked tool.
+type ToolCallOpener interface {
+	OpenToolCall(ToolCallDetails)
+}
+
+// WithToolCallOpener makes tool calls in the transcript clickable.
+func WithToolCallOpener(o ToolCallOpener) HandlerOption {
+	return func(dh *dialogueHandler) { dh.toolCallOpener = o }
+}
+
 // WithCloseFunc sets a function called when a command returns
 // CommandResult.Exit == true.
 func WithCloseFunc(fn func()) HandlerOption {
@@ -154,6 +164,7 @@ type dialogueHandler struct {
 	completer     ContextCompleter
 	// attachmentOpener previews attachments clicked in the transcript.
 	attachmentOpener AttachmentOpener
+	toolCallOpener   ToolCallOpener
 	closeFn          func()
 	ctx              context.Context
 	inputFocused     bool // true when last mouse interaction was in the input area
@@ -163,6 +174,11 @@ type dialogueHandler struct {
 	// into the input area, so the drag keeps selecting and auto-scrolls
 	// instead of handing focus to the input mid-drag.
 	messagesDragging bool
+	// A tool-row press is handled on release, before focus switches to the
+	// floating window. Repeated held-button events must not reopen it.
+	toolCallPressed  bool
+	toolCallCanceled bool
+	toolCallPressY   int
 
 	// busy is true while an agent completion is active. When busy,
 	// follow-up user messages are queued instead of being sent directly.
@@ -243,6 +259,11 @@ func (s *dialogueHandler) Resize(width, height int) {
 	s.comp.Resize(width, height)
 }
 
+func (s *dialogueHandler) toolCallHoverPosition(ev term.Event) term.Coordinates {
+	pos := s.comp.MessagesPosition()
+	return term.Coordinates{X: ev.MouseX - pos.X, Y: ev.MouseY - pos.Y}
+}
+
 func (s *dialogueHandler) Handle(ev term.Event) (exit, handled bool) {
 	switch ev.Mod {
 	case 0, term.ModCtrl, term.ModAlt, term.ModShift, term.ModCtrlAlt:
@@ -256,6 +277,41 @@ func (s *dialogueHandler) Handle(ev term.Event) (exit, handled bool) {
 		// content updates.
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if ev.Key == 0 && s.toolCallOpener != nil {
+			changed := s.comp.HoverToolCall(s.toolCallHoverPosition(ev))
+			defer func() { handled = handled || changed }()
+		}
+		if s.toolCallPressed || s.toolCallCanceled {
+			switch ev.Key {
+			case term.MouseRelease:
+				canceled := s.toolCallCanceled
+				s.toolCallPressed = false
+				s.toolCallCanceled = false
+				if !canceled && ev.MouseY == s.toolCallPressY && s.toolCallOpener != nil {
+					pos := s.comp.MessagesPosition()
+					if details, ok := s.comp.ToolCallAt(term.Coordinates{
+						X: ev.MouseX - pos.X, Y: ev.MouseY - pos.Y,
+					}); ok {
+						opener := s.toolCallOpener
+						s.mu.Unlock()
+						opener.OpenToolCall(details)
+						s.mu.Lock()
+					}
+				}
+				return false, true
+			case term.MouseLeft:
+				if ev.MouseY != s.toolCallPressY {
+					s.toolCallPressed = false
+					s.toolCallCanceled = true
+				}
+				return false, true
+			case 0:
+				return false, true
+			default:
+				s.toolCallPressed = false
+				s.toolCallCanceled = false
+			}
+		}
 		pos := s.comp.InputPosition()
 		// A held drag that began in the messages area keeps selecting even
 		// over the input box: route it (and its terminating release) to the
@@ -292,6 +348,17 @@ func (s *dialogueHandler) Handle(ev term.Event) (exit, handled bool) {
 		// Both run on bare motion so each can clear its own hover.
 		if codeHandled := s.handleCodeCopy(ev, dragging); chipHandled || codeHandled {
 			return chipExit, true
+		}
+		if ev.Key == term.MouseLeft && !dragging && s.toolCallOpener != nil {
+			pos := s.comp.MessagesPosition()
+			if _, ok := s.comp.ToolCallAt(term.Coordinates{
+				X: ev.MouseX - pos.X, Y: ev.MouseY - pos.Y,
+			}); ok {
+				s.toolCallPressed = true
+				s.toolCallCanceled = false
+				s.toolCallPressY = ev.MouseY
+				return false, true
+			}
 		}
 		if ev.Key == term.MouseLeft {
 			s.messagesDragging = true

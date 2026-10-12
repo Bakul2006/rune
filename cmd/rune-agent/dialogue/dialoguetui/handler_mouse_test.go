@@ -39,6 +39,218 @@ func mouseEv(x, y int, key term.Key) term.Event {
 	return term.Event{Type: term.EventMouse, MouseX: x, MouseY: y, Key: key}
 }
 
+type recordingToolOpener struct{ opened []ToolCallDetails }
+
+func (r *recordingToolOpener) OpenToolCall(details ToolCallDetails) {
+	r.opened = append(r.opened, details)
+}
+
+func TestHandlerToolCallHover(t *testing.T) {
+	for _, collapsed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("collapsed=%t", collapsed), func(t *testing.T) {
+			comp := NewComponent(ComponentConfig{StartCollapsed: collapsed})
+			h, tx, _ := Handler(context.Background(), new(sync.Mutex), comp,
+				term.NopInterrupter(), WithToolCallOpener(&recordingToolOpener{}))
+			defer close(tx)
+			h.Resize(60, 18)
+			comp.AddToolCall("parent", "agent", `{}`, "research")
+			comp.AddChildToolCall("parent", "child", "read_file", `{}`, "a.go")
+			w := term.NewStringWriter(60, 18)
+			h.Draw(w)
+
+			parent := comp.currentTurn.tools["parent"]
+			child := parent.childTurn.tools["child"]
+			parentName := findText(t, w, 60, "agent")
+			childName := findText(t, w, 60, "read_file")
+			h.Handle(mouseEv(parentName.X+1, parentName.Y, 0))
+			assert.True(t, parent.hovered)
+			assert.False(t, child.hovered)
+			h.Handle(mouseEv(childName.X+1, childName.Y, 0))
+			assert.False(t, parent.hovered)
+			assert.True(t, child.hovered)
+			summary := findText(t, w, 60, "research")
+			h.Handle(mouseEv(summary.X, summary.Y, 0))
+			assert.False(t, parent.hovered, "summary is not clickable")
+			assert.False(t, child.hovered)
+			h.Handle(mouseEv(childName.X+1, childName.Y, 0))
+			h.Handle(mouseEv(childName.X+1, comp.InputPosition().Y, 0))
+			assert.False(t, child.hovered)
+		})
+	}
+}
+
+func TestHandlerToolCallClick(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		collapsed  bool
+		child      bool
+		result     bool
+		label      string
+		wantName   string
+		wantOutput string
+	}{
+		{name: "collapsed parent", collapsed: true, label: "agent", wantName: "agent", wantOutput: "# Full response\n\nMore detail"},
+		{name: "collapsed child", collapsed: true, child: true, label: "read_file", wantName: "read_file", wantOutput: "child output"},
+		{name: "collapsed result", collapsed: true, child: true, result: true, label: "# Full response", wantName: "agent", wantOutput: "# Full response\n\nMore detail"},
+		{name: "expanded parent", label: "agent", wantName: "agent", wantOutput: "# Full response\n\nMore detail"},
+		{name: "expanded child", child: true, label: "read_file", wantName: "read_file", wantOutput: "child output"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comp := NewComponent(ComponentConfig{StartCollapsed: tc.collapsed, ToolResultMaxLines: 1})
+			opener := &recordingToolOpener{}
+			h, tx, _ := Handler(context.Background(), new(sync.Mutex), comp,
+				term.NopInterrupter(), WithToolCallOpener(opener))
+			defer close(tx)
+			h.Resize(60, 16)
+			comp.AddToolCall("parent", "agent", `{"description":"research"}`, "research")
+			if tc.child {
+				comp.AddChildToolCall("parent", "child", "read_file", `{"path":"a.go"}`, "")
+				comp.CompleteChildToolCall("parent", "child", "read_file", `{"path":"a.go"}`, "", "child output", false)
+			}
+			comp.CompleteToolCall("parent", "agent", `{"description":"research"}`, "research", "# Full response\n\nMore detail", false)
+			if tc.result {
+				comp.AddChildResult("parent", "# Full response\n\nMore detail", false)
+			}
+			w := term.NewStringWriter(60, 16)
+			h.Draw(w)
+
+			pos := findText(t, w, 60, tc.label)
+			pos.X++
+			_, handled := h.Handle(mouseEv(pos.X, pos.Y, term.MouseLeft))
+			assert.True(t, handled)
+			assert.Empty(t, opener.opened, "preview opens on release")
+			_, handled = h.Handle(mouseEv(pos.X, pos.Y, term.MouseRelease))
+			assert.True(t, handled)
+			require.Len(t, opener.opened, 1)
+			assert.Equal(t, tc.wantName, opener.opened[0].Name)
+			assert.Equal(t, tc.wantOutput, opener.opened[0].Output)
+			assert.Equal(t, `{"description":"research"}`, comp.currentTurn.tools["parent"].args)
+		})
+	}
+}
+
+func TestHandlerToolCallOutsideNameSelectsText(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		collapsed bool
+		text      string
+	}{
+		{name: "collapsed summary", collapsed: true, text: "a.go"},
+		{name: "expanded summary", text: "a.go"},
+		{name: "expanded args", text: "path=a.go"},
+		{name: "expanded output", text: "second line"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			comp := NewComponent(ComponentConfig{StartCollapsed: tc.collapsed})
+			opener := &recordingToolOpener{}
+			h, tx, _ := Handler(context.Background(), new(sync.Mutex), comp,
+				term.NopInterrupter(), WithToolCallOpener(opener))
+			defer close(tx)
+			h.Resize(60, 16)
+			comp.AddToolCall("call", "read_file", `{"path":"a.go"}`, "a.go")
+			comp.CompleteToolCall("call", "read_file", `{"path":"a.go"}`, "a.go", "first line\nsecond line", false)
+			w := term.NewStringWriter(60, 16)
+			h.Draw(w)
+
+			pos := findText(t, w, 60, tc.text)
+			end := pos.X + len(tc.text) - 1
+			for _, ev := range clickDrag(pos.X, pos.Y, end, pos.Y) {
+				h.Handle(ev)
+			}
+			assert.Empty(t, opener.opened)
+			sel, ok := h.Selection()
+			assert.True(t, ok)
+			assert.Equal(t, tc.text, sel)
+		})
+	}
+}
+
+func TestHandlerToolCallClickOpensOncePerPress(t *testing.T) {
+	comp := NewComponent(ComponentConfig{StartCollapsed: true})
+	opener := &recordingToolOpener{}
+	h, tx, _ := Handler(context.Background(), new(sync.Mutex), comp,
+		term.NopInterrupter(), WithToolCallOpener(opener))
+	defer close(tx)
+	h.Resize(60, 16)
+	comp.AddToolCall("call", "read_file", `{}`, "")
+	h.Draw(term.NewStringWriter(60, 16))
+	pos := term.CoordinatesSum(comp.MessagesPosition(), comp.turnNode.Position())
+	pos.X += 5
+	h.Handle(mouseEv(pos.X, pos.Y, term.MouseLeft))
+	h.Handle(mouseEv(pos.X, pos.Y, term.MouseLeft))
+	assert.Empty(t, opener.opened)
+	h.Handle(mouseEv(pos.X, pos.Y, term.MouseRelease))
+	assert.Len(t, opener.opened, 1)
+	h.Handle(mouseEv(pos.X, pos.Y, term.MouseLeft))
+	assert.Len(t, opener.opened, 1)
+	h.Handle(mouseEv(pos.X, pos.Y, term.MouseRelease))
+	assert.Len(t, opener.opened, 2)
+}
+
+func TestHandlerToolCallPressDraggedAwayDoesNotOpen(t *testing.T) {
+	comp := NewComponent(ComponentConfig{StartCollapsed: true})
+	opener := &recordingToolOpener{}
+	h, tx, _ := Handler(context.Background(), new(sync.Mutex), comp,
+		term.NopInterrupter(), WithToolCallOpener(opener))
+	defer close(tx)
+	h.Resize(60, 16)
+	comp.AddToolCall("call", "read_file", `{}`, "")
+	comp.AddToolCall("other", "write_stdin", `{}`, "")
+	h.Draw(term.NewStringWriter(60, 16))
+	pos := term.CoordinatesSum(comp.MessagesPosition(), comp.turnNode.Position())
+	pos.X += 5
+	h.Handle(mouseEv(pos.X, pos.Y, term.MouseLeft))
+	h.Handle(mouseEv(pos.X, pos.Y+1, term.MouseLeft))
+	h.Handle(mouseEv(pos.X, pos.Y+1, term.MouseLeft))
+	h.Handle(mouseEv(pos.X, pos.Y+1, term.MouseRelease))
+	assert.Empty(t, opener.opened)
+	h.Handle(mouseEv(pos.X, pos.Y+1, term.MouseLeft))
+	h.Handle(mouseEv(pos.X, pos.Y+1, term.MouseRelease))
+	require.Len(t, opener.opened, 1)
+	assert.Equal(t, "write_stdin", opener.opened[0].Name)
+}
+
+func TestHandlerToolCallClickInScrolledHistory(t *testing.T) {
+	comp := NewComponent(ComponentConfig{StartCollapsed: true})
+	opener := &recordingToolOpener{}
+	h, tx, _ := Handler(context.Background(), new(sync.Mutex), comp,
+		term.NopInterrupter(), WithToolCallOpener(opener))
+	defer close(tx)
+	h.Resize(60, 16)
+	comp.AddToolCall("first", "read_file", `{"path":"first.go"}`, "")
+	comp.CompleteToolCall("first", "read_file", `{"path":"first.go"}`, "", "first output", false)
+	comp.AddReceiveMessage("intervening reply")
+	comp.AddToolCall("second", "read_file", `{"path":"second.go"}`, "")
+	comp.CompleteToolCall("second", "read_file", `{"path":"second.go"}`, "", "second output", false)
+	for range 25 {
+		comp.AddReceiveMessage("later reply")
+	}
+	for comp.SeekUp() {
+	}
+	h.Draw(term.NewStringWriter(60, 16))
+	pos := comp.MessagesPosition()
+	var first *Turn
+	var firstNode component.ListNode
+	for node, ok := comp.messages.Front(); ok; node, ok = node.Next() {
+		if turn, ok := node.Value().(*Turn); ok {
+			first = turn
+			firstNode = node
+			break
+		}
+	}
+	require.NotNil(t, first)
+	firstRow := firstNode.Position().Y
+	_, handled := h.Handle(mouseEv(pos.X+5, pos.Y+firstRow, term.MouseLeft))
+	assert.True(t, handled)
+	_, handled = h.Handle(mouseEv(pos.X+5, pos.Y+firstRow, term.MouseRelease))
+	assert.True(t, handled)
+	require.Len(t, opener.opened, 1)
+	assert.Equal(t, "first output", opener.opened[0].Output)
+	// A click on a non-tool row must still be available to text selection.
+	_, _ = h.Handle(mouseEv(pos.X+5, pos.Y+firstRow+2, term.MouseLeft))
+	assert.Len(t, opener.opened, 1)
+}
+
 // tripleClick returns the 6-event sequence (click-release × 3) for a
 // triple-click at the given screen position.
 func tripleClick(x, y int) []term.Event {

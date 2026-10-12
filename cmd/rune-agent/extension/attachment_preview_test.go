@@ -19,14 +19,20 @@ package extension
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/llmapi"
+	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/cmd/rune-agent/dialogue/dialoguetui"
+	"unstable.build/rune/internal/component/markdown"
+	mdhandler "unstable.build/rune/internal/handler/markdown"
 )
 
 func TestEncodeParseAttachmentPartV1Roundtrip(t *testing.T) {
@@ -83,6 +89,101 @@ func TestEncodeParseAttachmentPartV1Roundtrip(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tc.meta, gotMeta)
 			assert.Equal(t, tc.body, gotBody)
+		})
+	}
+}
+
+func TestPreviewSpanPadsMarkdown(t *testing.T) {
+	md, err := markdown.New("hello")
+	require.NoError(t, err)
+	span := newPreviewSpan(mdhandler.New(md))
+	span.Resize(20, 4)
+	w := term.NewStringWriter(20, 4)
+	span.Draw(w)
+	assert.Zero(t, w.Cells()[0].Ch)
+	assert.NotZero(t, w.Cells()[1].Ch)
+	assert.Zero(t, w.Cells()[19].Ch)
+	exit, handled := span.Handle(term.Event{Type: term.EventKey, Key: term.KeyEsc})
+	assert.True(t, exit)
+	assert.True(t, handled)
+}
+
+func TestToolCallPreviewerOpensOneWindowPerToolCall(t *testing.T) {
+	turn := dialoguetui.NewTurn(&dialoguetui.ComponentConfig{}, nil)
+	turn.AddToolCall("a", "read_file", "", "")
+	turn.AddToolCall("b", "write_stdin", "", "")
+	turn.Resize(60, turn.Height(60))
+	a, ok := turn.ToolCallAt(term.Coordinates{X: 2, Y: 0})
+	require.True(t, ok)
+	b, ok := turn.ToolCallAt(term.Coordinates{X: 2, Y: 1})
+	require.True(t, ok)
+	require.NotEqual(t, a.Key, b.Key)
+
+	wm := &previewWindowManager{open: make(map[uint64]browserapi.Floating)}
+	p := newToolCallPreviewer(&aiEditorHandler{wm: wm, n: stubNotifications{}})
+
+	p.OpenToolCall(a)
+	p.OpenToolCall(a)
+	assert.Equal(t, []uint64{2}, wm.openIDs(), "clicking again replaces the preview")
+	// The replaced window's Close arrives after its replacement opened.
+	wm.deliverCloses(t)
+	p.OpenToolCall(a)
+	assert.Equal(t, []uint64{3}, wm.openIDs(), "a stale close must not orphan the preview")
+
+	p.OpenToolCall(b)
+	assert.Equal(t, []uint64{3, 4}, wm.openIDs(), "each tool call has its own preview")
+
+	require.NoError(t, wm.CloseWindow(previewWindow(3)))
+	wm.deliverCloses(t)
+	p.OpenToolCall(a)
+	assert.Equal(t, []uint64{4, 5}, wm.openIDs())
+}
+
+func TestToolCallPreviewMarkdown(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		details dialoguetui.ToolCallDetails
+		want    []string
+	}{
+		{
+			name:    "agent response is markdown",
+			details: dialoguetui.ToolCallDetails{Name: "agent", Args: `{"description":"research"}`, Output: "# Findings\n\n**Important**", Done: true, MarkdownOutput: true},
+			want:    []string{"# agent", "````json\n{\n  \"description\": \"research\"\n}\n````", "# Findings\n\n**Important**"},
+		},
+		{
+			name:    "agent skill result is markdown",
+			details: dialoguetui.ToolCallDetails{Name: "skill", Output: "# Research\n\n**Findings**", Done: true, MarkdownOutput: true},
+			want:    []string{"# skill", "## Result\n\n# Research\n\n**Findings**"},
+		},
+		{
+			name:    "other tool output is literal",
+			details: dialoguetui.ToolCallDetails{Name: "read_file", Args: `{"path":"x"}`, Output: "# not a heading\n```embedded```", Done: true, IsError: true},
+			want:    []string{"# read_file", "## Error", "# not a heading\n```embedded```"},
+		},
+		{
+			name:    "JSON output gets syntax highlighting",
+			details: dialoguetui.ToolCallDetails{Name: "web_fetch", Output: `{"result":true}`, Done: true},
+			want:    []string{"````json\n{\"result\":true}\n````"},
+		},
+		{
+			name:    "large integers survive formatting",
+			details: dialoguetui.ToolCallDetails{Name: "agent", Args: `{"value":12345678901234567890}`},
+			want:    []string{"12345678901234567890", "_Waiting for result…_"},
+		},
+		{
+			name:    "empty completed response",
+			details: dialoguetui.ToolCallDetails{Name: "write_stdin", Done: true},
+			want:    []string{"## Result\n\n_(no output)_"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toolCallPreviewMarkdown(tc.details)
+			for _, part := range tc.want {
+				assert.Contains(t, got, part)
+			}
+			if tc.details.Name == "read_file" {
+				assert.Contains(t, got, "````text\n# not a heading")
+			}
 		})
 	}
 }
@@ -275,4 +376,48 @@ func TestReplayedAttachmentsIgnoresPlainMessages(t *testing.T) {
 	assert.Nil(t, replayedAttachments(llmapi.Message{
 		Role: llmapi.RoleUser, Content: "Attached file foo.go: is what I meant",
 	}))
+}
+
+type previewWindow uint64
+
+func (w previewWindow) WindowID() uint64 { return uint64(w) }
+
+// previewWindowManager closes windows like the browser does over RPC:
+// the window goes away at once, but its handler's Close only runs later,
+// when the test calls deliverCloses.
+type previewWindowManager struct {
+	browserapi.WindowManager
+	nextID  uint64
+	open    map[uint64]browserapi.Floating
+	closing []browserapi.Floating
+}
+
+func (m *previewWindowManager) Floating(
+	h browserapi.Floating, _ browserapi.FloatingConfig,
+) (browserapi.Window, error) {
+	m.nextID++
+	m.open[m.nextID] = h
+	return previewWindow(m.nextID), nil
+}
+
+func (m *previewWindowManager) CloseWindow(win browserapi.Window) error {
+	h, ok := m.open[win.WindowID()]
+	if !ok {
+		return nil
+	}
+	delete(m.open, win.WindowID())
+	m.closing = append(m.closing, h)
+	return nil
+}
+
+func (m *previewWindowManager) deliverCloses(t *testing.T) {
+	for len(m.closing) > 0 {
+		h := m.closing[0]
+		m.closing = m.closing[1:]
+		require.NoError(t, h.Close())
+	}
+}
+
+func (m *previewWindowManager) openIDs() []uint64 {
+	return slices.Sorted(maps.Keys(m.open))
 }

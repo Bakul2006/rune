@@ -52,6 +52,17 @@ func TestTurnCompleteToolCall(t *testing.T) {
 	assert.False(t, turn.tools["c1"].isError)
 }
 
+func TestTurnCompleteToolCallPreservesInvocationArgs(t *testing.T) {
+	turn := newTestTurn()
+	turn.AddToolCall("c1", "read_file", `{"path":"a.go"}`, "a.go")
+	// The completion event does not carry the original arguments.
+	turn.CompleteToolCall("c1", "read_file", "", "", "full file data", false)
+	got := turn.tools["c1"].details()
+	assert.Equal(t, `{"path":"a.go"}`, got.Args)
+	assert.Equal(t, "a.go", got.Summary)
+	assert.Equal(t, "full file data", got.Output)
+}
+
 func TestTurnCompleteToolCallError(t *testing.T) {
 	turn := newTestTurn()
 
@@ -96,6 +107,94 @@ func TestTurnCompleteChildToolCall(t *testing.T) {
 	child := turn.tools["parent"].childTurn.tools["child1"]
 	assert.True(t, child.done)
 	assert.False(t, child.isError)
+}
+
+func TestTurnToolCallAtMemoryRecall(t *testing.T) {
+	for _, mode := range []collapseMode{collapseModeCollapsed, collapseModeExpanded} {
+		turn := newTestTurn()
+		turn.root = true
+		turn.SetCollapseMode(mode)
+		turn.AddMemoryRecall([]MemoryRecallEntry{{ID: "note", Content: "full memory content"}}, 0)
+		pos := findText(t, drawTurn(turn, 60), 60, "note")
+		got, ok := turn.ToolCallAt(term.Coordinates{X: pos.X + 1, Y: pos.Y})
+		assert.True(t, ok)
+		assert.Equal(t, "note", got.Name)
+		assert.Equal(t, "full memory content", got.Output)
+	}
+}
+
+func TestTurnToolCallAtOnlyName(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mode   collapseMode
+		text   string
+		offset int
+		want   bool
+	}{
+		{name: "collapsed name start", mode: collapseModeCollapsed, text: "read_file", want: true},
+		{name: "collapsed name end", mode: collapseModeCollapsed, text: "read_file", offset: 8, want: true},
+		{name: "collapsed status icon", mode: collapseModeCollapsed, text: "read_file", offset: -2},
+		{name: "collapsed summary", mode: collapseModeCollapsed, text: "a.go"},
+		{name: "collapsed space after name", mode: collapseModeCollapsed, text: "read_file", offset: 9},
+		{name: "expanded name start", mode: collapseModeExpanded, text: "read_file", want: true},
+		{name: "expanded name end", mode: collapseModeExpanded, text: "read_file", offset: 8, want: true},
+		{name: "expanded status icon", mode: collapseModeExpanded, text: "read_file", offset: -2},
+		{name: "expanded summary", mode: collapseModeExpanded, text: "a.go"},
+		{name: "expanded args", mode: collapseModeExpanded, text: "path=a.go"},
+		{name: "expanded output", mode: collapseModeExpanded, text: "second line"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			turn := newTestTurn()
+			turn.AddToolCall("c1", "read_file", `{"path":"a.go"}`, "a.go")
+			turn.CompleteToolCall("c1", "read_file", `{"path":"a.go"}`, "a.go", "first line\nsecond line", false)
+			turn.SetCollapseMode(tc.mode)
+			pos := findText(t, drawTurn(turn, 60), 60, tc.text)
+			pos.X += tc.offset
+			got, ok := turn.ToolCallAt(pos)
+			assert.Equal(t, tc.want, ok)
+			if tc.want {
+				assert.Equal(t, "read_file", got.Name)
+			}
+		})
+	}
+}
+
+func TestTurnToolCallAtNestedCollapsedName(t *testing.T) {
+	turn := newTestTurn()
+	turn.AddToolCall("parent", "agent", `{}`, "research")
+	turn.AddChildToolCall("parent", "child", "read_file", `{}`, "a.go")
+	turn.SetCollapseMode(collapseModeCollapsed)
+	w := drawTurn(turn, 60)
+
+	pos := findText(t, w, 60, "read_file")
+	got, ok := turn.ToolCallAt(pos)
+	assert.True(t, ok)
+	assert.Equal(t, "read_file", got.Name)
+	_, ok = turn.ToolCallAt(term.Coordinates{X: pos.X - 2, Y: pos.Y})
+	assert.False(t, ok, "child status icon")
+	_, ok = turn.ToolCallAt(findText(t, w, 60, "research"))
+	assert.False(t, ok, "parent summary")
+}
+
+func TestTurnToolCallAtExpandedFlatListOrder(t *testing.T) {
+	turn := newTestTurn()
+	turn.AddToolCall("parent", "agent", `{}`, "")
+	turn.AddChildToolCall("parent", "child", "read_file", `{}`, "")
+	turn.AddToolCall("other", "write_stdin", `{}`, "")
+	turn.CompleteChildToolCall("parent", "child", "read_file", `{}`, "", "child output", false)
+	turn.CompleteToolCall("parent", "agent", `{}`, "", "parent output", false)
+	turn.CompleteToolCall("other", "write_stdin", `{}`, "", "other output", false)
+	w := drawTurn(turn, 60)
+	y := turn.tools["parent"].listNode.Value().(component.Responsive).Height(60)
+	pos := findText(t, w, 60, "read_file")
+	assert.Equal(t, y, pos.Y)
+	got, ok := turn.ToolCallAt(pos)
+	assert.True(t, ok)
+	assert.Equal(t, "read_file", got.Name)
+	assert.Equal(t, "child output", got.Output)
+	parent, ok := turn.ToolCallAt(findText(t, w, 60, "agent"))
+	assert.True(t, ok)
+	assert.NotEqual(t, parent.Key, got.Key)
 }
 
 func TestTurnCompleteParentAfterChildren(t *testing.T) {
@@ -544,6 +643,51 @@ func TestTurnCollapsedDraw(t *testing.T) {
 	assert.Contains(t, got, "pattern=foo")
 }
 
+func TestTurnHoverColorsOnlyToolName(t *testing.T) {
+	for _, mode := range []collapseMode{collapseModeCollapsed, collapseModeExpanded} {
+		t.Run(map[collapseMode]string{collapseModeCollapsed: "collapsed", collapseModeExpanded: "expanded"}[mode], func(t *testing.T) {
+			turn := newTestTurn()
+			turn.AddToolCall("c1", "read_file", `{}`, "a.go")
+			turn.CompleteToolCall("c1", "read_file", `{}`, "a.go", "data", false)
+			turn.SetCollapseMode(mode)
+			w := drawTurn(turn, 40)
+			name := findText(t, w, 40, "read_file")
+			summary := findText(t, w, 40, "a.go")
+			cell := func(pos term.Coordinates) term.Cell { return w.Cells()[pos.Y*40+pos.X] }
+			assert.NotEqual(t, term.ColorWhite, cell(name).Fg)
+
+			turn.setHovered(turn.tools["c1"])
+			w.Reset()
+			turn.Draw(w)
+			assert.Equal(t, term.ColorWhite, cell(name).Fg)
+			assert.Equal(t, term.ColorWhite, cell(term.Coordinates{X: name.X + 8, Y: name.Y}).Fg)
+			assert.NotEqual(t, term.ColorWhite, cell(summary).Fg, "summary is not clickable")
+			assert.Equal(t, term.ColorGreen, cell(term.Coordinates{X: name.X - 2, Y: name.Y}).Fg,
+				"status icon retains its color")
+
+			turn.setHovered(nil)
+			w.Reset()
+			turn.Draw(w)
+			assert.NotEqual(t, term.ColorWhite, cell(name).Fg)
+		})
+	}
+}
+
+func TestTurnHoverExpandedMemoryChild(t *testing.T) {
+	turn := newTestTurn()
+	turn.AddMemoryRecall([]MemoryRecallEntry{{ID: "note", Content: "full memory"}}, 0)
+	turn.Resize(40, turn.Height(40))
+	child := turn.tools["memory-recall"].childTurn.tools["note"]
+	assert.True(t, turn.setHovered(child))
+	w := term.NewStringWriter(40, turn.Height(40))
+	turn.Draw(w)
+	assert.Equal(t, term.ColorWhite, w.Cells()[40+3].Fg)
+	assert.True(t, turn.setHovered(nil))
+	w.Reset()
+	turn.Draw(w)
+	assert.NotEqual(t, term.ColorWhite, w.Cells()[40+3].Fg)
+}
+
 func TestTurnCollapsedDrawBashShowsCommand(t *testing.T) {
 	turn := newTestTurn()
 	turn.Resize(50, 4)
@@ -913,6 +1057,25 @@ func TestTurnAddChildResult(t *testing.T) {
 	assert.Equal(t, "The exploration is complete.", resultNode.name)
 }
 
+func TestTurnChildResultPreviewUsesParentInvocation(t *testing.T) {
+	turn := newTestTurn()
+	turn.AddToolCall("parent", "skill", `{"name":"explore"}`, "explore")
+	turn.AddChildResult("parent", "# Full findings\n\nMore details", false)
+	turn.SetCollapseMode(collapseModeCollapsed)
+	w := drawTurn(turn, 60)
+
+	got, ok := turn.ToolCallAt(findText(t, w, 60, "# Full findings"))
+	assert.True(t, ok)
+	assert.Equal(t, "skill", got.Name)
+	assert.Equal(t, `{"name":"explore"}`, got.Args)
+	assert.Equal(t, "# Full findings\n\nMore details", got.Output)
+	assert.True(t, got.MarkdownOutput)
+	assert.Equal(t, "# Full findings", turn.tools["parent"].childTurn.tools["parent:result"].name)
+	parent, ok := turn.ToolCallAt(findText(t, w, 60, "skill"))
+	assert.True(t, ok)
+	assert.Equal(t, parent.Key, got.Key, "result leaf previews its parent's response")
+}
+
 func TestTurnAddChildResultError(t *testing.T) {
 	turn := newTestTurn()
 	turn.AddToolCall("parent", "agent", `{}`, "explore")
@@ -1007,4 +1170,35 @@ func TestTruncateFirstLine(t *testing.T) {
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+// findText returns the screen cell where text is first drawn.
+func findText(t *testing.T, w *term.StringWriter, width int, text string) term.Coordinates {
+	t.Helper()
+	cells := w.Cells()
+	want := []rune(text)
+	for i := 0; i+len(want) <= len(cells); i++ {
+		if (i%width)+len(want) > width {
+			continue
+		}
+		match := true
+		for j, r := range want {
+			if cells[i+j].Ch != r {
+				match = false
+				break
+			}
+		}
+		if match {
+			return term.Coordinates{X: i % width, Y: i / width}
+		}
+	}
+	t.Fatalf("%q is not drawn", text)
+	return term.Coordinates{}
+}
+
+func drawTurn(turn *Turn, width int) *term.StringWriter {
+	turn.Resize(width, turn.Height(width))
+	w := term.NewStringWriter(width, turn.Height(width))
+	turn.Draw(w)
+	return w
 }
