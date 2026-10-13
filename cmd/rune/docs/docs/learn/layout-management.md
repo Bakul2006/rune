@@ -170,11 +170,14 @@ the focused window and turns it into a tab, collapsing the split. Run it with
 preset provides a prompt-prefill binding:
 
 ```
-windowconverttab <name> [<icon>]
+windowconverttab [<name> [<icon>]]
 ```
 
-If the focused window is a floating window, converting it to a tab
-closes the floater.
+If you omit the name, the tab gets a random two-word name such as
+`brave-otter`. Setting a custom icon requires an explicit name. If the
+focused window is a floating window, converting it to a tab closes the
+floater. If the window's content is already a tab, the command does
+nothing.
 
 ## Floating windows
 

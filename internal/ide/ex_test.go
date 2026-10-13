@@ -2058,7 +2058,7 @@ func TestExKeySequence(t *testing.T) {
 				defer mu.Unlock()
 				ex.Handle(ev)
 				return true
-			}, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor(), opts...))
+			}, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor(), testNameGenerator, opts...))
 		ex.subscribeCommands()
 		b := testEx{ex: ex}
 		closeFns = append(closeFns, func() error {
@@ -2202,7 +2202,7 @@ func newExSequencerHarness(
 			ex.Handle(ev)
 			return true
 		}, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil,
-		testPromptEditor(), opts...))
+		testPromptEditor(), testNameGenerator, opts...))
 	ex.subscribeCommands()
 
 	// Register a recording sink for every command named by a binding so
@@ -3600,6 +3600,12 @@ func testPromptEditor() command.Editor {
 	}
 }
 
+type fixedNameGenerator string
+
+func (g fixedNameGenerator) generateName() string { return string(g) }
+
+const testNameGenerator = fixedNameGenerator("brave-otter")
+
 func newExForTestingTerminal(
 	t *testing.T, workspace workspace.Workspace,
 	ed text.Editor,
@@ -3620,7 +3626,7 @@ func newExForTestingTerminal(
 	scheduler, mu := installDefaultTestScheduler(&emulatorCfg)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, barCfg, publishEvent,
-		0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor(), opts...))
+		0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor(), testNameGenerator, opts...))
 	ex.subscribeCommands()
 	return testEx{ex: ex, mu: mu, scheduler: scheduler}
 }
@@ -3653,7 +3659,7 @@ func newExForTestingVTECapacity(
 		}, ws, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
 		nopPublishEvent, initialVTECapacity, clipboard.NewInMemory(),
-		nil, nil, e.Browser(), nil, testPromptEditor(), opts...))
+		nil, nil, e.Browser(), nil, testPromptEditor(), testNameGenerator, opts...))
 	return testEx{ex: e, mu: mu, scheduler: scheduler}
 }
 
@@ -3808,7 +3814,7 @@ func newExForTestingWithWorkspace(
 	scheduler, mu := installDefaultTestScheduler(&emulatorCfg)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
-		publishEvent, 0, clip, nil, nil, ex.Browser(), nil, testPromptEditor(), finalOpts...))
+		publishEvent, 0, clip, nil, nil, ex.Browser(), nil, testPromptEditor(), testNameGenerator, finalOpts...))
 	ex.subscribeCommands()
 	ex.newEmulatorHandler = func(args []string) (vtereservoir.VTE, error) {
 		return newTestVteWithConfig(args), nil
@@ -3847,7 +3853,7 @@ func newExForTestingCommandsPreview(
 	scheduler, mu := installDefaultTestScheduler(&emulatorCfg)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
-		publishEvent, 0, clip, nil, previews, ex.Browser(), nil, testPromptEditor(), finalOpts...))
+		publishEvent, 0, clip, nil, previews, ex.Browser(), nil, testPromptEditor(), testNameGenerator, finalOpts...))
 	ex.subscribeCommands()
 	ex.newEmulatorHandler = func(args []string) (vtereservoir.VTE, error) {
 		return newTestVteWithConfig(args), nil
@@ -3897,7 +3903,7 @@ func newExForTestingWithStorage(
 
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return ed, nil }, workspace, svc,
 		notifications, uri, emulatorCfg, plugin.DefaultBarConfig(),
-		publishEvent, 0, clip, nil, nil, ex.Browser(), nil, testPromptEditor(), finalOpts...))
+		publishEvent, 0, clip, nil, nil, ex.Browser(), nil, testPromptEditor(), testNameGenerator, finalOpts...))
 	ex.subscribeCommands()
 	ex.newEmulatorHandler = func(args []string) (vtereservoir.VTE, error) {
 		return newTestVteWithConfig(args), nil
@@ -5340,7 +5346,7 @@ func newExForReservoirTesting(
 	require.NoError(t, e.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return texttest.NopEditor(), nil }, ws, svc,
 		notifications, uri, emCfg, plugin.DefaultBarConfig(),
 		nopPublishEvent, initialCapacity, clipboard.NewInMemory(),
-		nil, nil, e.Browser(), nil, testPromptEditor(), finalOpts...))
+		nil, nil, e.Browser(), nil, testPromptEditor(), testNameGenerator, finalOpts...))
 	require.NoError(t, e.subscribeCommands())
 
 	// Wrap the closure created by init so we can observe which branch
@@ -5549,7 +5555,7 @@ func TestExUsesSharedIDEStorage(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, ex.init(func(exoeditor.Reloader, schemeapi.Terminal) (text.Editor, error) { return texttest.NopEditor(), nil }, workspace, storage,
 		notifications, uri, vte.DefaultConfig(), plugin.DefaultBarConfig(),
-		nopPublishEvent, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor()))
+		nopPublishEvent, 0, clipboard.NewInMemory(), nil, nil, ex.Browser(), nil, testPromptEditor(), testNameGenerator))
 
 	require.Equal(t, 0, storage.partitionCalls)
 	require.Same(t, storage, ex.storage)
@@ -6890,6 +6896,56 @@ func TestSwitchToTab(t *testing.T) {
 	handlertest.TestHandlerSequence(t, b, 30, 15, cases)
 }
 
+func TestConvertTab(t *testing.T) {
+	cases := []struct {
+		name string
+		// alreadyTab converts the window content to a "build" tab with
+		// icon 'X' before running the command under test.
+		alreadyTab bool
+		args       []string
+		wantName   string
+		wantIcon   rune
+	}{
+		{name: "no args", wantName: "brave-otter", wantIcon: defaultConvertTabIcon},
+		{name: "empty name", args: []string{""}, wantName: "brave-otter",
+			wantIcon: defaultConvertTabIcon},
+		{name: "empty name with icon", args: []string{"", "Y"}, wantName: "brave-otter",
+			wantIcon: 'Y'},
+		{name: "name only", args: []string{"build"}, wantName: "build",
+			wantIcon: defaultConvertTabIcon},
+		{name: "name and icon", args: []string{"build", "X"}, wantName: "build",
+			wantIcon: 'X'},
+		{name: "already a tab without args", alreadyTab: true, wantName: "build",
+			wantIcon: 'X'},
+		{name: "already a tab with name and icon", alreadyTab: true,
+			args: []string{"other", "Y"}, wantName: "build", wantIcon: 'X'},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newExForTesting(t, texttest.NopEditor())
+			defer b.Close()
+			ctx := context.Background()
+
+			require.NoError(t, b.terminalnew(ctx))
+			if tc.alreadyTab {
+				require.NoError(t, b.convertTab(ctx, "build", "X"))
+			}
+			require.NoError(t, b.convertTab(ctx, tc.args...))
+
+			br := b.comp.Browser()
+			require.Len(t, br.Tabs(), 1)
+			tab, ok := b.comp.FocusTab()
+			require.True(t, ok)
+			name, _, ok := br.TabName(tab.URI())
+			require.True(t, ok)
+			assert.Equal(t, tc.wantName, name)
+			icon, _, ok := br.TabIcon(tab.URI())
+			require.True(t, ok)
+			assert.Equal(t, tc.wantIcon, icon)
+		})
+	}
+}
+
 func TestTabFocusSwitchesToOwningWindow(t *testing.T) {
 	cases := []handlertest.SequenceTestCase{
 		// Two tabs across a vertical split: hello.go in the left
@@ -7175,6 +7231,22 @@ func TestRunStopTasks(t *testing.T) {
 ││                           │
 ││                           │
 └└───────────────────────────┘`},
+			{":windowconverttab other y>", // already a tab: no error, unchanged
+				`┌━━━━━━━─────────────────────┐
+│x asset                     │
+├┌───────────────────────────┤
+││ ▀     task   echo b     │
+││start command: context c   │
+││anceled▐                   │
+││                           │
+││                           │
+││                           │
+││                           │
+││                           │
+││                           │
+││                           │
+││                           │
+└└───────────────────────────┘`},
 			{":edit abc>:write>",
 				`┌─────────━━━━━──────────────┐
 │x asset  o abc              │
@@ -7382,6 +7454,22 @@ func TestRunStopTasks(t *testing.T) {
 │             ││AAAAAAAAAAAAA│
 │             ││AAAAAAAAAAAAA│
 │             ││AAAAAAAAAAAAA│
+└─────────────┘└─────────────┘`},
+			{":tasknew lint right -- echo c>:windowfocus right>:windowconverttab>",
+				`┌───────━━━━━━━━━━━━━────────┐
+│o abc  8 brave-otter        │
+├─────────────┐┌─────────────┐
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
+│             ││             │
 └─────────────┘└─────────────┘`},
 		}
 

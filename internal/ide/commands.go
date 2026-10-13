@@ -183,8 +183,10 @@ var (
 		"windowconverttab": {
 			man: textapi.CommandManual{
 				Summary: "Convert the content of the window in focus into a tab. " +
-					"If the current window is a floating window, it is closed.",
-				Synopsis: "<name> [<icon>]",
+					"If no name is given, a random one is used. " +
+					"If the current window is a floating window, it is closed. " +
+					"If the content is already a tab, this command does nothing.",
+				Synopsis: "[<name> [<icon>]]",
 			},
 			handler: (*ex).convertTab,
 		},

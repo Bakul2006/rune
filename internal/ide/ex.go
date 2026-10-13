@@ -32,6 +32,7 @@ import (
 	"syscall"
 	"time"
 
+	petname "github.com/dustinkirkland/golang-petname"
 	"github.com/ernestrc/go-multierror"
 	log "github.com/sirupsen/logrus"
 	"github.com/unstablebuild/blue/iterator"
@@ -106,6 +107,19 @@ type macroRecorder interface {
 	RegisterID() string
 }
 
+// nameGenerator generates names for content the user did not name.
+type nameGenerator interface {
+	generateName() string
+}
+
+// petnameGenerator generates random two-word names such as "brave-otter".
+// Names are not guaranteed to be unique.
+type petnameGenerator struct{}
+
+func (petnameGenerator) generateName() string {
+	return petname.Generate(2, "-")
+}
+
 // ex implements a tui.Handler by wrapping an editor.Component and
 // providing an ex editor type of interface.
 type ex struct {
@@ -170,6 +184,7 @@ type ex struct {
 	// and the companion shell's input line. It is a required
 	// dependency (see newEx) so neither consumer has to guard nil.
 	promptEditor      command.Editor
+	nameGen           nameGenerator
 	pluginWaitTimeout time.Duration
 	// stepWaitTimeout bounds how long one alias step may hold the
 	// dispatch slot after claiming its waiter. Must exceed
@@ -261,6 +276,7 @@ func newEx(
 	parser syntaxapi.Parser,
 	svc vctrl.Service,
 	promptEditor command.Editor,
+	nameGen nameGenerator,
 	commandObserver commandObserver,
 	debugCommands bool,
 	commandPromptCfg commandPromptConfig,
@@ -276,7 +292,7 @@ func newEx(
 	e.svc = svc
 	err = e.init(edFactory, m, storage, notifications, uri,
 		emulatorConfig, pluginBarConfig, publishEvent, initialVTECapacity, clip, macro,
-		dispatchOnPreview, tm, parser, promptEditor, opts...)
+		dispatchOnPreview, tm, parser, promptEditor, nameGen, opts...)
 	if err != nil {
 		// The async terminal's worker goroutine outlives a failed
 		// construction otherwise: nothing will ever call Close.
@@ -314,12 +330,17 @@ func (e *ex) init(
 	tm browser.TabManager,
 	parser syntaxapi.Parser,
 	promptEditor command.Editor,
+	nameGen nameGenerator,
 	opts ...text.Option,
 ) (err error) {
 	if promptEditor == nil {
 		panic("ide.ex requires a prompt editor")
 	}
+	if nameGen == nil {
+		panic("ide.ex requires a name generator")
+	}
 	e.promptEditor = promptEditor
+	e.nameGen = nameGen
 	e.extReady = make(map[string]chan extReadyJob)
 	e.bgCtx, e.bgCancel = context.WithCancel(context.Background())
 	err = e.doInit(m, storage, notifications, uri,
@@ -1566,12 +1587,14 @@ func (e *ex) moveTab(_ context.Context, args ...string) error {
 var defaultConvertTabIcon = ''
 
 func (e *ex) convertTab(ctx context.Context, args ...string) error {
-	if len(args) == 0 {
-		return errors.New("command expects at least one argument with tab name")
-	}
-
 	var icon rune
-	name := args[0]
+	var name string
+	if len(args) > 0 {
+		name = args[0]
+	}
+	if name == "" {
+		name = e.nameGen.generateName()
+	}
 	if len(args) > 1 {
 		runeArgs := []rune(args[1])
 		if len(runeArgs) > 0 {
@@ -1584,7 +1607,7 @@ func (e *ex) convertTab(ctx context.Context, args ...string) error {
 	win := e.invokeWindow()
 	tab, ok := e.comp.Browser().NewTabFromContent(icon, name, win)
 	if !ok {
-		return errors.New("window content is already a tab")
+		return nil
 	}
 
 	if win == e.companionTerminalWin {
