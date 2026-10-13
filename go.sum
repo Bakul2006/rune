@@ -519,8 +519,6 @@ github.com/unstablebuild/notify v0.10.4 h1:AStjrILfwMmW8RxnN656wtnTTAtXodVdyWdoQ
 github.com/unstablebuild/notify v0.10.4/go.mod h1:Q1U21KXundJt7qEvc4z4fFtzuDTZOTrhvCIJDZp5SBk=
 github.com/unstablebuild/pty v1.3.1 h1:GQSjqGKSOkOCu+X/F5yFUSuwp7Fi08xXn28DcuXhu/k=
 github.com/unstablebuild/pty v1.3.1/go.mod h1:BpzWw5G39oyDqoJhusXyOiTk9/bsAblSD4Js9K462Pw=
-github.com/unstablebuild/rune-go-sdk v0.14.0 h1:QwCPZQNK33RAAzx6OHF9W8cxanjP6EqCkWrnsGAjyys=
-github.com/unstablebuild/rune-go-sdk v0.14.0/go.mod h1:NOvmmFvveXFC1AolJjwZfzA/EndgYoZ1fkt2RStmXsc=
 github.com/unstablebuild/rune-go-sdk v0.14.1 h1:aBeqWNoTKES91KBWU5cz7lG1I+mxGmwfMocsm+cHaUo=
 github.com/unstablebuild/rune-go-sdk v0.14.1/go.mod h1:NOvmmFvveXFC1AolJjwZfzA/EndgYoZ1fkt2RStmXsc=
 github.com/unstablebuild/tcell/v3 v3.6.5 h1:ZokqnobK5xMQud8uqRI0PjcWWnlWb2zR5kyhrhMpuW4=
