@@ -117,7 +117,8 @@ type TaskSession struct {
 	WindowMinimizedAlignment component.Alignment
 }
 
-// ExtensionTab is a tab whose content an extension serves, shown in a tiled window.
+// ExtensionTab is a tab whose content an extension serves. WindowID is zero
+// when the tab is inactive, otherwise it identifies the tiled window showing it.
 type ExtensionTab struct {
 	URI      workspaceapi.URI
 	Icon     rune

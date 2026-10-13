@@ -9274,6 +9274,128 @@ func TestRestoreExtensionTabs(t *testing.T) {
 		assert.True(t, m.exHandler(m.focusHandler()).comp.PendingTabs().Contains(uri))
 	})
 
+	t.Run("all open tabs survive reload", func(t *testing.T) {
+		for _, tt := range []struct {
+			name    string
+			visible int
+		}{
+			{name: "one visible", visible: 1},
+			{name: "all inactive"},
+			{name: "two visible in splits", visible: 2},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				m, _ := setup(t, true)
+				uris := []workspaceapi.URI{uri}
+				for _, raw := range []string{"fake://host/second", "fake://host/third"} {
+					u, err := workspaceapi.ParseURI(raw)
+					require.NoError(t, err)
+					uris = append(uris, u)
+				}
+				names := []string{"chat", "second", "third"}
+				icons := []rune{'x', 'y', 'z'}
+				wantURIs := []string{tabURI, uris[1].String(), uris[2].String()}
+
+				func() {
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					ex := m.exHandler(m.focusHandler())
+					b := ex.comp.Browser()
+					layout := b.TileLayout()
+					right, ok := b.Window(layout.Children[1].WindowID)
+					require.True(t, ok)
+					for i := 1; i < len(uris); i++ {
+						tab, err := ex.comp.Tab(uris[i], icons[i], names[i], browsertest.NewTestHandler())
+						require.NoError(t, err)
+						require.NoError(t, right.SetContent(tab))
+					}
+					switch tt.visible {
+					case 0:
+						require.NoError(t, right.SetContent(browsertest.NewTestHandler()))
+					case 2:
+						left, ok := b.Window(layout.Children[0].WindowID)
+						require.True(t, ok)
+						tab, ok := b.Tab(uri)
+						require.True(t, ok)
+						require.NoError(t, left.SetContent(tab))
+					}
+					b.SetFocus(right)
+				}()
+
+				assertTabs := func(pending bool) {
+					t.Helper()
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					ex := m.exHandler(m.focusHandler())
+					b := ex.comp.Browser()
+					var gotURIs []string
+					for _, tab := range ex.comp.Tabs() {
+						if tab.URI().Scheme() == "fake" {
+							gotURIs = append(gotURIs, tab.URI().String())
+						}
+					}
+					require.Equal(t, wantURIs, gotURIs, "all tabs must retain their order")
+					for i, u := range uris {
+						tab, ok := b.Tab(u)
+						require.True(t, ok)
+						assert.Equal(t, pending, ex.comp.PendingTabs().Contains(u))
+						_, icon, _ := b.TabIcon(u)
+						_, name, _ := b.TabName(u)
+						assert.Equal(t, icons[i], icon)
+						assert.Equal(t, names[i], name)
+						win, bound := tab.Window()
+						side := -1
+						if i == 2 && tt.visible > 0 {
+							side = 1
+						} else if i == 0 && tt.visible == 2 {
+							side = 0
+						}
+						if side < 0 {
+							assert.False(t, bound, "inactive tab %s must remain in the tab bar", u)
+							continue
+						}
+						require.True(t, bound)
+						layout := b.TileLayout()
+						require.Len(t, layout.Children, 2)
+						assert.Equal(t, layout.Children[side].WindowID, win.WindowID())
+						focus, _ := win.Focus()
+						assert.Equal(t, side == 1, focus)
+					}
+				}
+
+				reload(t, m)
+				assertTabs(true)
+				reload(t, m)
+				assertTabs(true)
+
+				handlers := make(map[string]browserapi.Handler)
+				for _, u := range uris {
+					handlers[u.String()] = browsertest.NewTestHandler()
+				}
+				rec := recordingOpener{open: func(_ context.Context, u workspaceapi.URI) (browserapi.Handler, error) {
+					return handlers[u.String()], nil
+				}}
+				rec.register(t, m)
+				require.Eventually(t, func() bool {
+					m.quiesce()
+					m.mu.Lock()
+					defer m.mu.Unlock()
+					b := m.exHandler(m.focusHandler()).comp.Browser()
+					for _, u := range uris {
+						tab, ok := b.Tab(u)
+						if !ok || tab.Handler() != handlers[u.String()] {
+							return false
+						}
+					}
+					return true
+				}, 2*time.Second, 10*time.Millisecond)
+				assert.ElementsMatch(t, wantURIs, rec.snapshot())
+				assertTabs(false)
+				reload(t, m)
+				assertTabs(true)
+			})
+		}
+	})
+
 	// A second reload can land while the first one's placeholder is still
 	// being opened. The reloaded workspace saves the placeholder as the
 	// tab, and the open in flight belongs to the workspace that is gone: it
