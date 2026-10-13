@@ -535,7 +535,7 @@ func (c *Component) applyTabDecorations(idx int, t *Tab) {
 	var icon rune
 	switch t.status.State {
 	case programstatus.Working:
-		if t.status.Progress >= 0 {
+		if cfg.Progress && t.status.Progress >= 0 {
 			c.tabs.SetTabProgress(idx, t.status.Progress, cfg.WorkingDoneAttr)
 		} else {
 			c.tabs.ResetTabProgress(idx)

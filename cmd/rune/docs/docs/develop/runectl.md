@@ -130,8 +130,12 @@ runectl status wrap --app git --msg "pre-push checks" -- make lint test
 
 ### How Rune shows it
 
-A working tab's icon spins and its name fills up as a progress bar when
-the program reports one; a tab that is blocked on you,
+A working tab's icon spins. Set `terminal.status.progress` to `true` to
+split content and workspace tab labels at the reported percentage, with
+`working_done_attr` styling the completed prefix and activity animation
+covering the remainder. It defaults to `false`, so activity animation covers
+the full label; reported progress is still retained in the status.
+A tab that is blocked on you,
 failed, or finished takes the colour pair configured for that state under
 `terminal.status`, and a program that reports `idle` (waiting on you)
 colours the tab's icon. The workspace bar shows the most pressing status

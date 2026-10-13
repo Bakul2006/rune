@@ -3469,7 +3469,7 @@ func (h *workspaceManagerHandler) decorateWorkspaceBar() {
 		} else {
 			h.bar.ResetIconAttr(idx)
 		}
-		if sum.State == programstatus.Working && sum.Progress >= 0 {
+		if h.status.cfg.Progress && sum.State == programstatus.Working && sum.Progress >= 0 {
 			h.bar.SetTabProgress(idx, sum.Progress, h.status.cfg.WorkingDoneAttr)
 		} else {
 			h.bar.ResetTabProgress(idx)

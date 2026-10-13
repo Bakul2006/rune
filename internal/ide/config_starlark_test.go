@@ -368,6 +368,8 @@ func TestRuneStarFixture(t *testing.T) {
 				params:   c.params,
 			})
 			require.NoError(t, err)
+			status := cfg["terminal"].(map[string]any)["status"].(map[string]any)
+			assert.Equal(t, false, status["progress"])
 			c.checks(t, cfg)
 		})
 	}

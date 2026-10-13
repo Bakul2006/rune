@@ -4465,6 +4465,11 @@ func (c ideConfig) tabStatusConfig() browser.TabStatusConfig {
 	if !ok {
 		return ret
 	}
+	if progress, err := cfg.GetBool("progress"); err == nil {
+		ret.Progress = progress
+	} else if err != config.ErrNotFound {
+		c.errors["terminal.status.progress"] = err
+	}
 	if spinner, err := cfg.GetString("spinner"); err == nil {
 		ret.Spinner = []rune(spinner)
 	} else if err != config.ErrNotFound {

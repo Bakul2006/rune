@@ -1120,8 +1120,70 @@ func TestTabStatusNotifications(t *testing.T) {
 	require.NoError(t, m.Close())
 }
 
+func TestWorkspaceBarStatusProgress(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			cfg := defaultConfigWithWrap(false)
+			cfg.cfg["terminal"] = map[string]any{
+				"status": map[string]any{"progress": enabled},
+			}
+			cfg.cfg["animations"] = map[string]any{
+				"active_workspace_tab": map[string]any{"shader": "shine"},
+			}
+			m, slot := newActivityTestManager(t, cfg)
+			t.Cleanup(func() { require.NoError(t, m.Close()) })
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			const width = 120
+			m.workspaces[slot].tabname = "tinygrad"
+			m.Resize(width, 9)
+			chat, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
+			require.NoError(t, err)
+			comp := &m.workspaces[slot].ex.comp
+			_, err = comp.Tab(chat, 'x', "rolling-fox", browsertest.NewTestHandler())
+			require.NoError(t, err)
+			barIdx := slices.Index(m.barIdxToSlot, slot)
+			require.GreaterOrEqual(t, barIdx, 0)
+			m.bar.SetTabProgress(barIdx, 25, term.Attributes{Fg: term.ColorGreen})
+			for _, progress := range []int{0, 50, 100} {
+				require.NoError(t, comp.SetTabStatus(chat, programstatus.Report{
+					State: programstatus.Working, Progress: progress,
+				}))
+				m.bar.Draw(term.NewStringWriter(width, m.barSize()))
+				pct, _ := m.bar.TabProgress(barIdx)
+				offset, fullWidth, ok := m.bar.TabRect(barIdx)
+				require.True(t, ok)
+				shadeOffset, shadeWidth, shadeOK := m.bar.TabShadeRect(barIdx)
+				if enabled {
+					assert.Equal(t, progress, pct)
+					if progress == 100 {
+						assert.False(t, shadeOK)
+					} else {
+						require.True(t, shadeOK)
+						if progress > 0 {
+							assert.Less(t, shadeWidth, fullWidth)
+						}
+					}
+				} else {
+					assert.Equal(t, -1, pct)
+					require.True(t, shadeOK)
+					assert.Equal(t, offset, shadeOffset)
+					assert.Equal(t, fullWidth, shadeWidth)
+				}
+				assert.True(t, m.shadedBar.Running())
+				summary, _ := m.workspaceStatus(slot)
+				assert.Equal(t, progress, summary.Progress)
+			}
+		})
+	}
+}
+
 func TestWorkspaceBarStatusRollup(t *testing.T) {
-	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
+	cfg := defaultConfigWithWrap(false)
+	cfg.cfg["terminal"] = map[string]any{
+		"status": map[string]any{"progress": true},
+	}
+	m, slot := newActivityTestManager(t, cfg)
 	chat, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
 	require.NoError(t, err)
 	other, err := workspaceapi.ParseURI("rune-agent://model/other")

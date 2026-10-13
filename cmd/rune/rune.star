@@ -268,7 +268,7 @@ config = {
         # duration string.
         "active_content_tab": {
             "enabled": True,
-            "shader":  "inferno",
+            "shader":  "shine",
             "fps":     10,
             "loop":    "1400ms",
         },
@@ -277,7 +277,7 @@ config = {
         # keys as active_content_tab.
         "active_workspace_tab": {
             "enabled": True,
-            "shader":  "inferno",
+            "shader":  "shine",
             "fps":     10,
             "loop":    "1400ms",
         },
@@ -962,27 +962,30 @@ config = {
         # `runectl status` or agent harnesses like claude code.
         "status": {
             "enabled":  True,
+            # Split content and workspace tab labels at reported progress.
+            # False keeps activity animations over the full label.
+            "progress": False,
             # Icons shown for a blocked tab by kind, and for done and error
             # tabs. The defaults are Nerd Font glyphs.
             "icons": {
-                "permission": "󰏥",
-                "question":   "󰋗",
-                "auth":       "󱐡",
-                "done":       "󰗠",
-                "error":      "󰅙",
+                "permission": "?",
+                "question":   "?",
+                "auth":       "@",
+                "done":       "",
+                "error":      "x",
             },
             "spinner":     "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
             "spinner_fps": 10,
+            # Colour of the completed part when progress is enabled.
+            "working_done_attr": attr(fg = "default", bg = "default"),
+            "blocked_attr":      attr(fg = "default", bg = "default"),
+            "done_attr":         attr(fg = "default", bg = "default"),
+            "error_attr":        attr(fg = "default", bg = "default"),
             "idle_icon_attr":    attr(fg = "yellow"),
             "working_icon_attr": attr(fg = "yellow"),
-            # Colour of the completed part of the name of a working tab.
-            "working_done_attr": attr(fg = "green"),
-            "blocked_attr":      attr(fg = "yellow"),
-            "blocked_icon_attr": attr(fg = "red"),
-            "done_attr":         attr(fg = "green"),
-            "done_icon_attr":    attr(fg = "silver"),
-            "error_attr":        attr(fg = "red"),
-            "error_icon_attr":   attr(fg = "yellow"),
+            "done_icon_attr":    attr(fg = "green"),
+            "blocked_icon_attr": attr(fg = "yellow"),
+            "error_icon_attr":   attr(fg = "red"),
             # States a tab entering raises a notification for while it is out
             # of sight, and the minimum time between two such notifications
             # for the same tab. Every new message a program reports is

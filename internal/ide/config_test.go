@@ -510,6 +510,35 @@ func TestConfigDefault(t *testing.T) {
 	assertDefaultConfig(t, ret)
 }
 
+func TestTabStatusConfigProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  map[string]any
+		want    bool
+		wantErr bool
+	}{
+		{name: "no status config"},
+		{name: "missing", status: map[string]any{}},
+		{name: "disabled", status: map[string]any{"progress": false}},
+		{name: "enabled", status: map[string]any{"progress": true}, want: true},
+		{name: "invalid", status: map[string]any{"progress": "true"}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := ideConfig{cfg: map[string]any{}, errors: map[string]error{}}
+			if tc.status != nil {
+				cfg.cfg["terminal"] = map[string]any{"status": tc.status}
+			}
+			assert.Equal(t, tc.want, cfg.tabStatusConfig().Progress)
+			assert.True(t, cfg.tabStatusEnabled())
+			if tc.wantErr {
+				assert.Error(t, cfg.errors["terminal.status.progress"])
+			} else {
+				assert.Empty(t, cfg.errors)
+			}
+		})
+	}
+}
+
 func TestTabStatusConfigIgnoresPluginIcons(t *testing.T) {
 	m, err := decodeConfig(strings.NewReader(`
 terminal:

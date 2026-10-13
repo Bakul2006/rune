@@ -85,6 +85,10 @@ func DefaultTabStatusConfig() TabStatusConfig {
 // Every attribute is layered over the tab's usual one, so colors left
 // at term.ColorDefault keep the configured ones.
 type TabStatusConfig struct {
+	// Progress enables a completed prefix on working tab labels. When false
+	// (the default), activity animation covers the full label and reported
+	// progress remains available in the tab's status.
+	Progress bool
 	// Spinner holds the frames cycled, at SpinnerFPS frames per second,
 	// as the icon of working tabs. Empty leaves the icon alone; a zero
 	// SpinnerFPS falls back to 10.
@@ -105,7 +109,7 @@ type TabStatusConfig struct {
 	IdleIconAttr term.Attributes
 	// WorkingIconAttr styles the spinner. WorkingDoneAttr paints the
 	// completed prefix of the name of a working tab that reported
-	// progress.
+	// progress, when Progress is enabled.
 	WorkingIconAttr term.Attributes
 	WorkingDoneAttr term.Attributes
 	// BlockedAttr, DoneAttr and ErrorAttr style the name of a tab in the

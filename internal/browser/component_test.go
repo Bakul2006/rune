@@ -1705,6 +1705,7 @@ func TestSetTabStatusDecorations(t *testing.T) {
 	for _, tc := range suite {
 		t.Run(tc.desc, func(t *testing.T) {
 			b, tabs, draw := newStatusComponent(t)
+			b.config.TabStatus.Progress = true
 			a := tabs[0]
 			if tc.bell {
 				require.True(t, b.SetTabDefaultNameAndAttrs(a.uri, "abcdefghij", bell))
@@ -1727,6 +1728,14 @@ func TestSetTabStatusDecorations(t *testing.T) {
 			}
 			assert.Equal(t, tc.shaded, b.shadedTabs.Running())
 			assert.Equal(t, tc.shaded, b.spinner != nil)
+			if tc.painted > 0 {
+				offset, width, ok := b.tabs.TabRect(0)
+				require.True(t, ok)
+				shadeOffset, shadeWidth, ok := b.tabs.TabShadeRect(0)
+				require.True(t, ok)
+				assert.Equal(t, offset.X+tc.painted, shadeOffset.X)
+				assert.Equal(t, width-tc.painted, shadeWidth)
+			}
 
 			attrs, ok := b.TabAttrs(a.uri)
 			require.True(t, ok)
@@ -1751,6 +1760,31 @@ func TestSetTabStatusDecorations(t *testing.T) {
 			assert.False(t, b.shadedTabs.Running())
 			assert.Nil(t, b.spinner)
 		})
+	}
+}
+
+func TestSetTabStatusProgressDisabled(t *testing.T) {
+	b, tabs, draw := newStatusComponent(t)
+	uri := tabs[0].uri
+	b.tabs.SetTabProgress(0, 25, term.Attributes{Fg: term.ColorGreen})
+	for _, progress := range []int{0, 50, 100} {
+		require.True(t, b.SetTabStatus(uri, programstatus.Report{
+			State: programstatus.Working, Progress: progress,
+		}))
+		draw()
+		pct, _ := b.tabs.TabProgress(0)
+		assert.Equal(t, -1, pct, "reported progress %d must not split the label", progress)
+		offset, width, ok := b.tabs.TabRect(0)
+		require.True(t, ok)
+		shadeOffset, shadeWidth, ok := b.tabs.TabShadeRect(0)
+		require.True(t, ok)
+		assert.Equal(t, offset, shadeOffset)
+		assert.Equal(t, width, shadeWidth)
+		assert.True(t, b.shadedTabs.Running())
+		assert.NotNil(t, b.spinner)
+		status, ok := b.TabStatus(uri)
+		require.True(t, ok)
+		assert.Equal(t, progress, status.Progress, "presentation must not change reported progress")
 	}
 }
 
