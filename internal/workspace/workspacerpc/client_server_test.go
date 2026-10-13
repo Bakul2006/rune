@@ -362,6 +362,9 @@ func TestClientServer(t *testing.T) {
 				NewFile(gomock.Any(), gomock.Any()).
 				Return(mockFile).AnyTimes()
 
+			mockFile.EXPECT().Close().Return(nil).
+				AnyTimes( /* Close runs in runtime.Finalizer */ )
+
 			s.s.(*workspacetest.MockWorkspace).EXPECT().
 				SetPtySize(gomock.Any(), gomock.Eq(workspaceapi.PtySize{Columns: 1, Rows: 1})).
 				Return(errors.New("bummer"))
