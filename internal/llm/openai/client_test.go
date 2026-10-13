@@ -34,6 +34,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/unstablebuild/rune-go-sdk/api/llmapi"
+	"github.com/unstablebuild/rune-go-sdk/api/llmapi/llmrpc"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCreateCompletion(t *testing.T) {
@@ -1083,7 +1085,11 @@ func TestResponsesReasoningRoundTrip(t *testing.T) {
 			break
 		}
 		if ev.Type == llmapi.EventStreamDone {
-			doneData = ev.DoneData
+			wire, err := proto.Marshal(llmrpc.ToProtoEvent(ev))
+			require.NoError(t, err)
+			var decoded llmrpc.Event
+			require.NoError(t, proto.Unmarshal(wire, &decoded))
+			doneData = llmrpc.FromProtoEvent(&decoded).DoneData
 		}
 	}
 	require.NoError(t, it.Err())
@@ -1101,15 +1107,26 @@ func TestResponsesReasoningRoundTrip(t *testing.T) {
 	// Now feed that assistant message + a tool result back into a new
 	// request and verify the input array faithfully reproduces the
 	// reasoning + function_call + function_call_output sequence.
-	captured := captureResponsesRequest(t, Config{
-		ForceResponsesAPI: true,
-	}, llmapi.Request{
+	request := llmapi.Request{
 		Messages: []llmapi.Message{
 			{Role: llmapi.RoleUser, Content: "explore"},
 			doneData.Message,
 			{Role: llmapi.RoleTool, ToolCallID: "call_1", Content: "ok"},
 		},
-	})
+	}
+	header, err := llmrpc.ToCompletionHeader(llmapi.ModelEntry{Name: "gpt-6-sol", Provider: "codex"}, request)
+	require.NoError(t, err)
+	var messages []*llmrpc.Message
+	for _, msg := range request.Messages {
+		wire, err := proto.Marshal(llmrpc.ToProtoMessage(msg))
+		require.NoError(t, err)
+		var decoded llmrpc.Message
+		require.NoError(t, proto.Unmarshal(wire, &decoded))
+		messages = append(messages, &decoded)
+	}
+	_, replayed, err := llmrpc.RequestFromHeaderAndMessages(header, messages)
+	require.NoError(t, err)
+	captured := captureResponsesRequest(t, Config{ForceResponsesAPI: true}, replayed)
 
 	input, ok := captured.Body["input"].([]any)
 	require.True(t, ok)

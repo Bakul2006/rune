@@ -19,6 +19,7 @@ package agentools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -358,6 +359,94 @@ func TestResolvePath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := resolvePath(dirURI(tt.root), tt.path)
 			assert.Equal(t, tt.wantPath, got)
+		})
+	}
+}
+
+func TestReadFile_readObservation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hello.txt")
+	data := []byte("first\nsecond\nthird\n")
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+	tool := newReadFile(localFS{}, dirURI(dir), NewFileTracker(), 0)
+	tests := []struct {
+		name, path    string
+		offset, limit int
+		start, end    int
+		content       string
+	}{
+		{"relative", "hello.txt", 0, 0, 0, 4, "L1: first\nL2: second\nL3: third\nL4: \n"},
+		{"absolute", path, 2, 1, 1, 2, "L2: second\n"},
+		{"dot alias", "./hello.txt", 2, 1, 1, 2, "L2: second\n"},
+		{"parent alias", "sub/../hello.txt", 2, 1, 1, 2, "L2: second\n"},
+		{"limit clamped", "hello.txt", 3, 99, 2, 4, "L3: third\nL4: \n"},
+		{"offset clamped", "hello.txt", 99, 1, 4, 4, ""},
+		{"negative offset", "hello.txt", -1, 1, 0, 1, "L1: first\n"},
+		{"unlimited", "hello.txt", 3, -1, 2, 4, "L3: third\nL4: \n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tool.Execute(context.Background(), fmt.Sprintf(`{"path":%q,"offset":%d,"limit":%d}`, tt.path, tt.offset, tt.limit))
+			require.False(t, result.IsError, result.Content)
+			assert.Equal(t, tt.content, result.Content)
+			require.NotNil(t, result.ReadObservation)
+			assert.Equal(t, &agent.ReadObservation{
+				Path: path, ContentHash: sha256.Sum256(data), StartLine: tt.start, EndLine: tt.end,
+			}, result.ReadObservation)
+		})
+	}
+	for _, content := range []string{"", "single", "single\n"} {
+		t.Run(fmt.Sprintf("content %q", content), func(t *testing.T) {
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			result := tool.Execute(context.Background(), `{"path":"hello.txt"}`)
+			require.False(t, result.IsError, result.Content)
+			require.NotNil(t, result.ReadObservation)
+			assert.Equal(t, 0, result.ReadObservation.StartLine)
+			assert.Equal(t, len(strings.Split(content, "\n")), result.ReadObservation.EndLine)
+			assert.Equal(t, sha256.Sum256([]byte(content)), result.ReadObservation.ContentHash)
+		})
+	}
+}
+
+func TestReadFile_readObservationMutation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hello.txt")
+	tool := newReadFile(localFS{}, dirURI(dir), NewFileTracker(), 0)
+	var previous *agent.ReadObservation
+	for _, content := range []string{"first\nsecond\nthird", "changed\nsecond\nthird", "changed\nsecond\nlast"} {
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+		result := tool.Execute(context.Background(), `{"path":"hello.txt","offset":2,"limit":1}`)
+		require.False(t, result.IsError, result.Content)
+		assert.Equal(t, "L2: second\n", result.Content)
+		require.NotNil(t, result.ReadObservation)
+		assert.Equal(t, sha256.Sum256([]byte(content)), result.ReadObservation.ContentHash)
+		if previous != nil {
+			assert.NotEqual(t, previous.ContentHash, result.ReadObservation.ContentHash)
+		}
+		previous = result.ReadObservation
+	}
+}
+
+func TestReadFile_noReadObservation(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "binary.dat"), []byte{0, 1, 2, 0}, 0o644))
+	var imageData bytes.Buffer
+	require.NoError(t, png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 1, 1))))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "image.png"), imageData.Bytes(), 0o644))
+	tool := newReadFile(localFS{}, dirURI(dir), NewFileTracker(), 0)
+	for _, tt := range []struct {
+		name, args string
+		isError    bool
+	}{
+		{"invalid arguments", `not json`, true},
+		{"missing file", `{"path":"missing.txt"}`, true},
+		{"binary", `{"path":"binary.dat"}`, false},
+		{"image", `{"path":"image.png"}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tool.Execute(context.Background(), tt.args)
+			assert.Equal(t, tt.isError, result.IsError, result.Content)
+			assert.Nil(t, result.ReadObservation)
 		})
 	}
 }

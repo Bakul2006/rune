@@ -43,6 +43,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/term"
 
 	"unstable.build/rune/cmd/rune-agent/agent"
+	"unstable.build/rune/cmd/rune-agent/agent/agentools"
 	"unstable.build/rune/cmd/rune-agent/agent/skills"
 	"unstable.build/rune/cmd/rune-agent/configedit"
 	"unstable.build/rune/cmd/rune-agent/dialogue/dialoguemanager"
@@ -50,7 +51,36 @@ import (
 	"unstable.build/rune/cmd/rune-agent/llm/llmarg"
 	"unstable.build/rune/cmd/rune-agent/llm/llmtest"
 	runemcp "unstable.build/rune/cmd/rune-agent/mcp"
+	"unstable.build/rune/internal/debug"
 )
+
+func TestProviderContentSearch(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "literal.txt"), []byte("other\nneedle configuration value\n"), 0o644))
+	fs := testLocalFS{root: dir}
+	cwd := dirURI(dir)
+	tools, tracker := agentools.DefaultTools(fs, testLocalExec{}, cwd, nil, agentools.Config{}, configedit.NopConfig())
+	registry := agent.NewRegistry(tools...)
+	registerOpenAITools(registry, fs, cwd, tracker, nil, configedit.NopConfig())
+	for _, provider := range []string{"openai", "codex", "anthropic"} {
+		t.Run(provider, func(t *testing.T) {
+			tool, ok := registry.Get("search_content", provider)
+			require.True(t, ok, "literal search must retain matching lines")
+			result := tool.Execute(t.Context(), `{"pattern":"needle","path":null,"include":null}`)
+			require.False(t, result.IsError, result.Content)
+			assert.Contains(t, result.Content, "literal.txt:2:needle configuration value")
+			if provider != "anthropic" {
+				_, ok = registry.Get("grep_files", provider)
+				assert.True(t, ok)
+				_, ok = registry.Get("exec_command", provider)
+				assert.True(t, ok)
+				_, ok = registry.Get("bash", provider)
+				assert.False(t, ok)
+				assert.Empty(t, registry.ReplacementFor("search_content", provider))
+			}
+		})
+	}
+}
 
 func TestCompleteChatAddSymbolUsesReferencedSymbols(t *testing.T) {
 	h := &aiEditorHandler{parser: &symbolsParser{
@@ -1215,6 +1245,125 @@ func TestE2ESearchContentSkipsSwapFiles(t *testing.T) {
 		"search_content must skip editor swap files")
 	assert.NotContains(t, searchResult, "SWAPSENTINEL",
 		"search_content must not leak swap file contents to the model")
+}
+
+func TestChatRepeatedReadRequestsReturnToolErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		varied bool
+	}{
+		{name: "identical section"},
+		{name: "different already-read subranges", varied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const repeats = 20
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "sample.txt"),
+				[]byte("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n"), 0o644))
+			var responses []llmtest.Response
+			for i := range repeats + 2 {
+				offset, limit := 2, 6
+				if tc.varied && i > 0 {
+					offset, limit = 3+i%2, 2
+				}
+				if i == repeats+1 {
+					offset, limit = 8, 1
+				}
+				responses = append(responses, llmtest.Response{
+					ToolCalls: []llmapi.ToolCall{{
+						ID: fmt.Sprintf("read-%d", i), Type: llmapi.ToolTypeFunction,
+						Function: llmapi.FunctionCall{
+							Name:      "read_file",
+							Arguments: fmt.Sprintf(`{"path":"sample.txt","offset":%d,"limit":%d}`, offset, limit),
+						},
+					}},
+					FinishReason: llmapi.FinishReasonToolCall,
+				})
+			}
+			responses = append(responses, llmtest.Response{Chunks: []string{"finished normally"}, FinishReason: llmapi.FinishReasonStop})
+			model := llmapi.ModelEntry{Provider: "codex", Name: "test-model", ContextWindow: 128_000}
+			svc := llmtest.New([]llmapi.ModelEntry{model}, responses...)
+			ctx, cancel := context.WithCancel(t.Context())
+			interruptCh := make(chan struct{}, 64)
+			interrupter := term.FuncInterrupter(func(context.Context) error {
+				select {
+				case interruptCh <- struct{}{}:
+				default:
+				}
+				return nil
+			})
+			comp := dialoguetui.NewComponent(dialoguetui.ComponentConfig{})
+			mu := new(sync.Mutex)
+			dhandler, tx, rx := dialoguetui.Handler(ctx, mu, comp, interrupter)
+			fs, cwd := testLocalFS{root: dir}, dirURI(dir)
+			tools, tracker := agentools.DefaultTools(fs, testLocalExec{}, cwd, nil, agentools.Config{}, configedit.NopConfig())
+			registry := agent.NewRegistry(tools...)
+			registerOpenAITools(registry, fs, cwd, tracker, nil, configedit.NopConfig())
+			skillReg := skills.NewRegistry(fs, cwd, nil, nil)
+			store := newMemDialogueStore()
+			ag := agent.NewAgent(svc, registry, skillReg, store, agent.NoMemory(), agent.Config{
+				SystemPrompt: "test", Model: model, Workspace: cwd,
+			})
+			owner := &aiEditorHandler{n: stubNotifications{}, p: interrupter}
+			syncComp := syncComponent{mu: mu, comp: comp, h: owner, tab: newTabStatusReporter(nil, workspaceapi.URI{}, owner.n)}
+			wrapped, msgRx := owner.wrapDialogueHandler(ctx, syncComp, dhandler, rx, "repeated-reads")
+			done := make(chan struct{})
+			go debug.CapturePanicReport(func() {
+				defer close(done)
+				createAgentCompletions(ctx, cancel, tx, msgRx, ag, nopSpawner{},
+					make(chan agent.ChildEvent), skillReg, "repeated-reads", syncComp, nil, store)
+			})
+			t.Cleanup(func() {
+				cancel()
+				<-done
+			})
+			h := &promptFlusher{t: t, inner: wrapped, interruptCh: interruptCh, settle: 100 * time.Millisecond}
+			const width, height = 100, 200
+			h.Resize(width, height)
+			keys, err := term.ParseKeys("read<enter>")
+			require.NoError(t, err)
+			for _, key := range keys {
+				h.Handle(term.Event{Type: term.EventKey, Ch: key.Ch, Key: key.Key, Mod: key.Mod})
+			}
+			require.EventuallyWithT(t, func(c *assert.CollectT) {
+				assert.Equal(c, len(responses), svc.CallCount())
+				rendered := handlertest.DrawHandler(h, width, height)
+				assert.Contains(c, rendered, "finished normally")
+				assert.Equal(c, repeats, strings.Count(rendered, "✗ read_file"), rendered)
+				assert.Equal(c, 2, strings.Count(rendered, "✓ read_file"), rendered)
+				assert.NotContains(c, rendered, "Paused this turn")
+			}, 5*time.Second, 10*time.Millisecond)
+
+			requests := svc.Requests()
+			require.Len(t, requests, len(responses))
+			for i := range repeats + 2 {
+				result, ok := findToolResult(requests[i+1].Request.Messages, fmt.Sprintf("read-%d", i))
+				require.True(t, ok, "provider must receive the result for read-%d", i)
+				switch i {
+				case 0:
+					assert.Equal(t, "L2: two\nL3: three\nL4: four\nL5: five\nL6: six\nL7: seven\n", result)
+				case repeats + 1:
+					assert.Equal(t, "L8: eight\n", result)
+				default:
+					offset, end := 2, 7
+					if tc.varied {
+						offset = 3 + i%2
+						end = offset + 1
+					}
+					assert.Contains(t, result, fmt.Sprintf("already read lines %d–%d", offset, end))
+					assert.Contains(t, result, "sample.txt")
+					assert.NotContains(t, result, "L2: two")
+					assert.NotContains(t, result, "L4: four")
+				}
+			}
+			for _, message := range requests[len(requests)-1].Request.Messages {
+				assert.NotContains(t, message.Content, "Read progress warning")
+				if message.Role == llmapi.RoleUser {
+					assert.Equal(t, "read", message.Content)
+				}
+			}
+		})
+	}
 }
 
 func TestHandlerAddToolsIsConcurrentWithReaders(t *testing.T) {

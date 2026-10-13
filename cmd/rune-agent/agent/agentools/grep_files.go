@@ -55,9 +55,8 @@ type grepFilesArgs struct {
 }
 
 // NewGrepFiles creates a grep_files tool that returns file paths whose
-// contents match a regex pattern, sorted by modification time. It is
-// designed to override search_content for providers that expect the
-// Codex grep_files interface (e.g. OpenAI).
+// contents match a regex pattern, sorted by modification time. It complements
+// search_content, which returns matching lines rather than only file paths.
 func NewGrepFiles(wfs workspaceapi.FileSystem, cwd workspaceapi.URI, tracker *FileTracker) agent.Tool {
 	return &grepFilesTool{fs: wfs, cwd: cwd, tracker: tracker}
 }

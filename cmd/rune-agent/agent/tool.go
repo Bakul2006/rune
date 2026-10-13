@@ -36,8 +36,18 @@ type ToolResult struct {
 	Compact           bool // Signals that the agent should compact the conversation.
 	ClearContext      bool // Signals that the agent should clear the conversation context.
 	ApprovedPlan      *dialoguemanager.ApprovedPlan
-	DropToolResultIDs []string // Tool call IDs whose results should be truncated in history.
-	TouchedFiles      []string // Files that were created or modified (not deleted) by this tool.
+	DropToolResultIDs []string         // Tool call IDs whose results should be truncated in history.
+	TouchedFiles      []string         // Files that were created or modified (not deleted) by this tool.
+	ReadObservation   *ReadObservation // Optional successful text-read coverage; not persisted.
+}
+
+// ReadObservation identifies the full file version and the zero-based,
+// half-open line range actually returned. Images and failed reads omit it.
+type ReadObservation struct {
+	Path        string
+	ContentHash [32]byte
+	StartLine   int
+	EndLine     int
 }
 
 // Tool is a capability that the agent can invoke via the LLM.

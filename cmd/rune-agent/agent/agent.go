@@ -406,6 +406,50 @@ func (a *Agent) Run(
 	return it
 }
 
+type readCoverage struct {
+	coverage []ReadObservation
+}
+
+func (p *readCoverage) contains(o *ReadObservation) bool {
+	if o == nil || o.Path == "" || o.StartLine < 0 || o.EndLine <= o.StartLine {
+		return false
+	}
+	var spans [][2]int
+	for _, old := range p.coverage {
+		if old.Path != o.Path || old.ContentHash != o.ContentHash {
+			continue
+		}
+		start, end := max(old.StartLine, o.StartLine), min(old.EndLine, o.EndLine)
+		if start < end {
+			spans = append(spans, [2]int{start, end})
+		}
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	end := o.StartLine
+	for _, span := range spans {
+		if span[0] > end {
+			return false
+		}
+		end = max(end, span[1])
+	}
+	return end == o.EndLine
+}
+
+func (p *readCoverage) record(o *ReadObservation) {
+	if o == nil || o.Path == "" || o.StartLine < 0 || o.EndLine <= o.StartLine {
+		return
+	}
+	p.coverage = slices.DeleteFunc(p.coverage, func(old ReadObservation) bool {
+		return old.Path == o.Path && old.ContentHash != o.ContentHash
+	})
+	// Prefer allowing a reread over retaining unbounded per-turn metadata.
+	if len(p.coverage) == 256 {
+		copy(p.coverage, p.coverage[1:])
+		p.coverage = p.coverage[:255]
+	}
+	p.coverage = append(p.coverage, *o)
+}
+
 func (a *Agent) run(
 	ctx context.Context, ch chan<- Event,
 	dialogueID string, userMessage string, opts runOptions,
@@ -609,6 +653,7 @@ func (a *Agent) run(
 	tools := a.registry.Tools(a.provider())
 
 	var transient []llmapi.Message
+	var reads readCoverage
 	var infos []toolCallInfo
 	var toolMsgs []llmapi.Message
 	var imageContentParts []llmapi.ContentPart
@@ -792,6 +837,7 @@ func (a *Agent) run(
 					messages = append(dialogue.Messages[:len(dialogue.Messages):len(dialogue.Messages)], resourceMsgs...)
 					userMsgIdx = len(dialogue.Messages) - 1
 					lastAPITokensSent = 0
+					reads = readCoverage{}
 					emit(ctx, ch, Event{Type: EventDone})
 					continue
 				}
@@ -1125,7 +1171,11 @@ func (a *Agent) run(
 								"duration", dur,
 							)
 						}
+						uncapped := result.Content
 						capToolResult(&result, maxOutput)
+						if result.Content != uncapped {
+							result.ReadObservation = nil
+						}
 						// Layer 1: belt-and-suspenders sanitisation so
 						// a stray invalid UTF-8 byte in any tool
 						// output (or in an error message that embeds
@@ -1241,6 +1291,13 @@ func (a *Agent) run(
 					}
 				}
 
+				if !result.IsError && tr.info.call.Function.Name == "read_file" && reads.contains(result.ReadObservation) {
+					o := result.ReadObservation
+					result = ToolResult{
+						IsError: true,
+						Content: fmt.Sprintf("You’ve already read lines %d–%d of %q, and the file is unchanged. Use the content already in context or read a section containing new lines.", o.StartLine+1, o.EndLine, o.Path),
+					}
+				}
 				emit(ctx, ch, Event{
 					Type:         EventToolResult,
 					ToolCallID:   tr.info.call.ID,
@@ -1265,6 +1322,9 @@ func (a *Agent) run(
 					result.Content = hres.Reason
 					result.IsError = true
 				}
+				if !result.IsError && tr.info.call.Function.Name == "read_file" {
+					reads.record(result.ReadObservation)
+				}
 				toolMsgs[tr.index] = llmapi.Message{
 					Role:       llmapi.RoleTool,
 					Content:    nonEmptyToolResult(result.Content),
@@ -1286,6 +1346,7 @@ func (a *Agent) run(
 			log.Debug("executed all tools: continuing loop",
 				"duration", toolCallDuration)
 			if compacted {
+				reads = readCoverage{}
 				// Signal a turn boundary so the TUI closes the
 				// current Turn and resets streaming state before
 				// the next LLM iteration begins.

@@ -3270,6 +3270,177 @@ Greet the user warmly.
 	}
 }
 
+func TestAgentDuplicateReadReturnsToolErrorWithoutPausing(t *testing.T) {
+	svc := &mockService{}
+	for i := range 25 {
+		svc.responses = append(svc.responses, toolCallResponse("read_file", `{}`, fmt.Sprint(i)))
+	}
+	svc.responses = append(svc.responses, stopResponse("continued normally"))
+	tool := &mockTool{name: "read_file", result: ToolResult{
+		Content:         "L10: content\nL11: content\n",
+		ReadObservation: &ReadObservation{Path: "/file", StartLine: 9, EndLine: 11},
+	}}
+	store := newMockStore()
+	ag := NewAgent(svc, NewRegistry(tool), noSkills(), store, NoMemory(), Config{SystemPrompt: "test"})
+	events := collectEvents(t, ag.Run(context.Background(), "d", "read"))
+	results := eventsByType(events, EventToolResult)
+	require.GreaterOrEqual(t, len(results), 2)
+	assert.False(t, results[0].IsError)
+	assert.True(t, results[1].IsError)
+	assert.Contains(t, results[1].ToolOutput, "already read lines 10–11")
+	assert.NotContains(t, results[1].ToolOutput, "L10: content")
+	assert.Empty(t, eventsByType(events, EventError))
+	assert.Equal(t, 26, svc.getCallCount())
+	thirdRequest := svc.requests[2].Messages
+	duplicate := thirdRequest[len(thirdRequest)-1]
+	assert.Equal(t, llmapi.RoleTool, duplicate.Role)
+	assert.Equal(t, "1", duplicate.ToolCallID)
+	assert.Contains(t, duplicate.Content, "already read lines 10–11")
+	d, _ := store.getDialogue("d")
+	for _, m := range d.Messages {
+		assert.NotContains(t, m.Content, "Read progress warning")
+		assert.NotContains(t, m.Content, "Paused this turn")
+	}
+	assert.Equal(t, "continued normally", d.Messages[len(d.Messages)-1].Content)
+}
+
+func TestReadCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		prior      [][2]int
+		start, end int
+		duplicate  bool
+	}{
+		{"exact", [][2]int{{10, 20}}, 10, 20, true},
+		{"subset", [][2]int{{10, 20}}, 12, 18, true},
+		{"union", [][2]int{{15, 20}, {10, 15}}, 10, 20, true},
+		{"overlapping union", [][2]int{{10, 17}, {15, 20}}, 12, 20, true},
+		{"gap", [][2]int{{10, 14}, {15, 20}}, 10, 20, false},
+		{"new first line", [][2]int{{10, 20}}, 9, 20, false},
+		{"new last line", [][2]int{{10, 20}}, 10, 21, false},
+		{"new section", [][2]int{{10, 20}}, 20, 30, false},
+		{"empty range", [][2]int{{10, 20}}, 20, 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var reads readCoverage
+			for _, span := range tc.prior {
+				reads.record(&ReadObservation{Path: "/file", StartLine: span[0], EndLine: span[1]})
+			}
+			o := &ReadObservation{Path: "/file", StartLine: tc.start, EndLine: tc.end}
+			assert.Equal(t, tc.duplicate, reads.contains(o))
+			o.Path = "/other"
+			assert.False(t, reads.contains(o))
+			o.Path, o.ContentHash = "/file", [32]byte{1}
+			assert.False(t, reads.contains(o))
+		})
+	}
+}
+
+func TestReadCoverageMutationAndBounds(t *testing.T) {
+	var reads readCoverage
+	for i := range 1000 {
+		reads.record(&ReadObservation{Path: fmt.Sprint(i), EndLine: 10})
+		require.LessOrEqual(t, len(reads.coverage), 256)
+	}
+	reads = readCoverage{}
+	original := &ReadObservation{Path: "/file", EndLine: 10}
+	reads.record(original)
+	assert.True(t, reads.contains(original))
+	changed := &ReadObservation{Path: "/file", EndLine: 10, ContentHash: [32]byte{1}}
+	assert.False(t, reads.contains(changed))
+	reads.record(changed)
+	assert.False(t, reads.contains(original), "reverting a changed file must permit a fresh read")
+	require.Len(t, reads.coverage, 1)
+}
+
+func TestAgentReadCoverageResetsEachRun(t *testing.T) {
+	svc := &mockService{}
+	for i := range 2 {
+		svc.responses = append(svc.responses, toolCallResponse("read_file", `{}`, fmt.Sprint(i)), stopResponse("done"))
+	}
+	tool := &mockTool{name: "read_file", result: ToolResult{Content: "unchanged", ReadObservation: &ReadObservation{Path: "/file", EndLine: 100}}}
+	ag := NewAgent(svc, NewRegistry(tool), noSkills(), newMockStore(), NoMemory(), Config{SystemPrompt: "test"})
+	for range 2 {
+		events := collectEvents(t, ag.Run(context.Background(), "d", "read"))
+		results := eventsByType(events, EventToolResult)
+		require.Len(t, results, 1)
+		assert.False(t, results[0].IsError)
+		assert.Empty(t, eventsByType(events, EventError))
+	}
+}
+
+func TestAgentReadCoverageIgnoresCappedAndFailedReads(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+			svc := &mockService{}
+			for i := range 20 {
+				svc.responses = append(svc.responses, toolCallResponse("read_file", `{}`, fmt.Sprint(i)))
+			}
+			svc.responses = append(svc.responses, stopResponse("done"))
+			tool := &mockTool{name: "read_file", result: ToolResult{
+				Content: strings.Repeat("text\n", 1000), IsError: failed,
+				ReadObservation: &ReadObservation{Path: "/file", EndLine: 1000},
+			}}
+			ag := NewAgent(svc, NewRegistry(tool), noSkills(), newMockStore(), NoMemory(), Config{
+				SystemPrompt: "test", MaxToolOutputBytes: 100,
+			})
+			events := collectEvents(t, ag.Run(context.Background(), "d", "read"))
+			assert.Empty(t, eventsByType(events, EventError))
+			assert.Equal(t, 21, svc.getCallCount())
+			for _, result := range eventsByType(events, EventToolResult) {
+				assert.NotContains(t, result.ToolOutput, "already read")
+			}
+		})
+	}
+}
+
+func TestAgentReadCoverageResetsAfterCompaction(t *testing.T) {
+	for _, automatic := range []bool{false, true} {
+		t.Run(fmt.Sprint(automatic), func(t *testing.T) {
+			first := toolCallResponse("read_file", `{}`, "read1")
+			responses := []mockResponse{first}
+			cfg := Config{SystemPrompt: "test"}
+			if automatic {
+				responses[0].usage = llmapi.Usage{TokensSent: 90000}
+				cfg.Model.ContextWindow = 100000
+			} else {
+				responses = append(responses, toolCallResponse("compact", `{}`, "compact"))
+			}
+			responses = append(responses, stopResponse("summary"), toolCallResponse("read_file", `{}`, "read2"), stopResponse("done"))
+			svc := &mockService{responses: responses}
+			read := &mockTool{name: "read_file", result: ToolResult{Content: "content", ReadObservation: &ReadObservation{Path: "/file", EndLine: 10}}}
+			compact := &mockTool{name: "compact", result: ToolResult{Compact: true}}
+			ag := NewAgent(svc, NewRegistry(read, compact), noSkills(), newMockStore(), NoMemory(), cfg)
+			events := collectEvents(t, ag.Run(context.Background(), "d", "read"))
+			assert.Empty(t, eventsByType(events, EventError))
+			require.NotEmpty(t, eventsByType(events, EventCompacted))
+			reads := 0
+			for _, result := range eventsByType(events, EventToolResult) {
+				if result.ToolName == "read_file" {
+					reads++
+					assert.False(t, result.IsError, result.ToolOutput)
+				}
+			}
+			assert.Equal(t, 2, reads)
+		})
+	}
+}
+
+func TestAgentDuplicateReadsInParallelBatch(t *testing.T) {
+	response := toolCallResponse("read_file", `{}`, "read1")
+	response.toolCalls = append(response.toolCalls, toolCallResponse("read_file", `{}`, "read2").toolCalls...)
+	svc := &mockService{responses: []mockResponse{response, stopResponse("done")}}
+	tool := &mockTool{name: "read_file", result: ToolResult{Content: "content", ReadObservation: &ReadObservation{Path: "/file", EndLine: 10}}}
+	ag := NewAgent(svc, NewRegistry(tool), noSkills(), newMockStore(), NoMemory(), Config{SystemPrompt: "test"})
+	events := collectEvents(t, ag.Run(context.Background(), "d", "read"))
+	assert.Empty(t, eventsByType(events, EventError))
+	results := eventsByType(events, EventToolResult)
+	require.Len(t, results, 2)
+	assert.False(t, results[0].IsError)
+	assert.True(t, results[1].IsError)
+	assert.Contains(t, results[1].ToolOutput, "already read")
+}
+
 func TestCommitAttributionInjectedWithoutPersistence(t *testing.T) {
 	svc := &mockService{responses: []mockResponse{stopResponse("hi")}}
 	store := newMockStore()

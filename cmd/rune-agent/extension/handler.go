@@ -257,6 +257,19 @@ var (
 	}
 )
 
+func registerOpenAITools(registry *agent.Registry, fs workspaceapi.FileSystem, cwd workspaceapi.URI, tracker *agentools.FileTracker, sessions *agentools.SessionManager, cfg configedit.Config) {
+	for _, provider := range []string{"openai", "codex"} {
+		registry.RegisterOverrides(provider,
+			agentools.NewListDir(fs, cwd),
+			agentools.NewWriteStdin(sessions),
+			agentools.NewGrepFiles(fs, cwd, tracker),
+		)
+		registry.RegisterReplacement(provider, "bash",
+			agentools.NewExecCommand(sessions, cwd, cfg))
+		registry.RegisterExclusions(provider, "compact")
+	}
+}
+
 func defaultMarkdownConfig() *markdown.Config {
 	cfg := markdown.DefaultConfig()
 	cfg.HeaderPrefix = false
@@ -359,21 +372,7 @@ func newCommandEventHandler(
 	ret.toolRegistry = agent.NewRegistry(tools...)
 	ret.executor = executor
 	ret.sessionMgr = agentools.NewSessionManager(ret.ctx, executor, terminal)
-	ret.toolRegistry.RegisterOverrides("openai",
-		agentools.NewListDir(fs, cwd),
-		agentools.NewWriteStdin(ret.sessionMgr),
-	)
-	ret.toolRegistry.RegisterOverrides("codex",
-		agentools.NewListDir(fs, cwd),
-		agentools.NewWriteStdin(ret.sessionMgr),
-	)
-	for _, provider := range []string{"openai", "codex"} {
-		ret.toolRegistry.RegisterReplacement(provider, "search_content",
-			agentools.NewGrepFiles(fs, cwd, tracker))
-		ret.toolRegistry.RegisterReplacement(provider, "bash",
-			agentools.NewExecCommand(ret.sessionMgr, cwd, cfg))
-		ret.toolRegistry.RegisterExclusions(provider, "compact")
-	}
+	registerOpenAITools(ret.toolRegistry, fs, cwd, tracker, ret.sessionMgr, cfg)
 	geminitools.Register(ret.toolRegistry)
 	ret.systemPrompt = agent.DefaultSystemPrompt(cwd)
 	ret.attribution = agent.DefaultAttribution()

@@ -206,6 +206,12 @@ func (t *readFileTool) Execute(ctx context.Context, arguments string) agent.Tool
 	return agent.ToolResult{
 		Content:           content,
 		DropToolResultIDs: staleIDs,
+		ReadObservation: &agent.ReadObservation{
+			Path:        filepath.Clean(path),
+			ContentHash: sha256.Sum256(data),
+			StartLine:   start,
+			EndLine:     end,
+		},
 	}
 }
 
