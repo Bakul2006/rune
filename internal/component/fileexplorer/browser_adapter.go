@@ -133,6 +133,9 @@ type Browser interface {
 	// Open opens a resource.
 	Open(workspaceapi.URI) (browserapi.Handler, error)
 
+	// Show shows a resource as if the user had clicked a link to it.
+	Show(workspaceapi.URI) error
+
 	// Resource returns a handler for a resource if open.
 	Resource(
 		workspaceapi.URI,
@@ -266,6 +269,10 @@ func (a *browserAdapter) Open(
 	uri workspaceapi.URI,
 ) (browserapi.Handler, error) {
 	return a.b.Open(uri)
+}
+
+func (a *browserAdapter) Show(uri workspaceapi.URI) error {
+	return a.b.Show(uri)
 }
 
 func (a *browserAdapter) Notify(

@@ -720,38 +720,31 @@ func newCommandEventHandler(
 	return ret, nil
 }
 
+// newLinkClickHandler returns a dialogue link handler that shows http,
+// https and file links through o, so they open as a meta-click on them
+// in Rune does. It leaves every other link to the dialogue.
 func newLinkClickHandler(
 	mu sync.Locker,
-	clip clipboard.Register,
+	o browserapi.ResourceOpener,
 	noti browserapi.Notifications,
 ) func(*url.URL) bool {
 	return func(link *url.URL) bool {
-		if link.Scheme != "http" && link.Scheme != "https" {
+		switch link.Scheme {
+		case "http", "https", "file":
+		default:
 			return false
 		}
 		// The dialogue calls this holding mu, which its stream consumer needs
-		// too, and the clipboard may shell out while notifying runs hooks.
-		// Relock in a defer so a panic still hands mu back to the dialogue's
-		// deferred Unlock.
+		// too, and Show and Notify wait on the host's lock. Relock in a defer
+		// so a panic still hands mu back to the dialogue's deferred Unlock.
 		mu.Unlock()
 		defer mu.Lock()
-		linkstr := link.String()
-		meta := clipboard.Data{Text: linkstr}
-		err := clip.Copy(clipboard.DefaultRegisterID, meta)
+		uri, err := workspaceapi.ParseURI(link.String())
+		if err == nil {
+			err = o.Show(uri)
+		}
 		if err != nil {
-			if noti != nil {
-				_, _ = noti.Notify(
-					browserapi.LevelError,
-					"copy URL to clipboard: %v", err,
-				)
-			}
-		} else {
-			if noti != nil {
-				_, _ = noti.Notify(
-					browserapi.LevelSuccess,
-					"copied URL %s to clipboard", linkstr,
-				)
-			}
+			_, _ = noti.Notify(browserapi.LevelError, "open %s: %v", link, err)
 		}
 		return true
 	}
@@ -761,7 +754,7 @@ func newLinkClickHandler(
 // mu, which the dialogue holds while it calls OnLinkClick.
 func (h *aiEditorHandler) dialogueConfig(mu sync.Locker) dialoguetui.ComponentConfig {
 	cfg := h.cfg
-	cfg.OnLinkClick = newLinkClickHandler(mu, h.clip, h.n)
+	cfg.OnLinkClick = newLinkClickHandler(mu, h.o, h.n)
 	return cfg
 }
 

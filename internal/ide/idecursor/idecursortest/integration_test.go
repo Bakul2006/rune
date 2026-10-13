@@ -490,6 +490,8 @@ func (a testBrowserAdapter) Open(uri workspaceapi.URI) (browserapi.Handler, erro
 	return a.component.Open(uri)
 }
 
+func (a testBrowserAdapter) Show(workspaceapi.URI) error { return nil }
+
 func (a testBrowserAdapter) window(w browserapi.Window) (browser.Window, error) {
 	win, ok := a.component.Window(w.WindowID())
 	if !ok {

@@ -742,7 +742,7 @@ func PermissionActionText(permission extensionapi.Permission) string {
 	case extensionapi.PermissionBrowserWindowManager:
 		return "manage the window manager"
 	case extensionapi.PermissionBrowserResourceOpener:
-		return "manage tabs"
+		return "open files and links"
 	case extensionapi.PermissionNotifications:
 		return "show notifications"
 	case extensionapi.PermissionInterrupt:

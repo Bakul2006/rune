@@ -115,6 +115,15 @@ func (s *interruptBrowser) Open(
 	return res, err
 }
 
+// Show satisfies browserrpc.BrowserServer
+func (s *interruptBrowser) Show(
+	ctx context.Context, req *browserrpc.ShowResourceRequest,
+) (*browserrpc.ShowResourceResponse, error) {
+	res, err := s.browserServer.Show(ctx, req)
+	s.interruptDraw()
+	return res, err
+}
+
 // SetContent satisfies browserrpc.BrowserServer
 func (s *interruptBrowser) SetContent(srv browserrpc.WindowManager_SetContentServer) error {
 	err := s.browserServer.SetContent(srv)

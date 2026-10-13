@@ -386,22 +386,14 @@ func (b *bootstrapHandler) dragObserver(ev gui.DragEvent) {
 	}
 }
 
-// linkObserver opens a URL the user meta-clicked in the rendered frame.
-// Workspace files open in the editor; anything else opens as the
-// meta_open_url config says.
+// linkObserver shows a URL the user meta-clicked in the rendered frame.
 func (b *bootstrapHandler) linkObserver(u *url.URL) {
-	if u.Scheme == "file" {
-		uri, err := workspaceapi.ParseURI(u.String())
-		if err != nil {
-			b.notifyError("open link", err)
-			return
-		}
-		if err := b.currentIDE().Open(uri); err != nil {
-			b.notifyError("open link", err)
-		}
+	uri, err := workspaceapi.ParseURI(u.String())
+	if err != nil {
+		b.notifyError("open link", err)
 		return
 	}
-	if err := b.currentIDE().OpenURL(u); err != nil {
+	if err := b.currentIDE().Show(uri); err != nil {
 		b.notifyError("open link", err)
 	}
 }

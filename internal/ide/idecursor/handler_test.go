@@ -62,6 +62,8 @@ func (s *stubOpener) Open(uri workspaceapi.URI) (browserapi.Handler, error) {
 	return texttest.NewTestHandler(), nil
 }
 
+func (s *stubOpener) Show(workspaceapi.URI) error { return nil }
+
 type stubWM struct{ set bool }
 
 func (stubWM) Focus() (browserapi.Window, error) { return stubWindow(1), nil }

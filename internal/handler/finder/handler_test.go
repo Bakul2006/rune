@@ -403,6 +403,8 @@ func (stubResourceOpener) Open(workspaceapi.URI) (browserapi.Handler, error) {
 	return stubBrowserHandler{}, nil
 }
 
+func (stubResourceOpener) Show(workspaceapi.URI) error { return nil }
+
 type stubBrowserHandler struct{}
 
 func (stubBrowserHandler) Handle(term.Event) (bool, bool) { return false, false }

@@ -244,6 +244,25 @@ func (s *Server) Open(
 	return &browserrpc.OpenResourceResponse{Uri: uri.String()}, nil
 }
 
+// Show satisfies BrowserServer.
+func (s *Server) Show(
+	ctx context.Context, req *browserrpc.ShowResourceRequest,
+) (*browserrpc.ShowResourceResponse, error) {
+	uri, err := workspaceapi.ParseURI(req.GetResource())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"parse resource %q: %v", req.GetResource(), err)
+	}
+
+	s.browser.Lock()
+	defer s.browser.Unlock()
+
+	if err := s.browser.Show(uri); err != nil {
+		return nil, err
+	}
+	return new(browserrpc.ShowResourceResponse), nil
+}
+
 // Publish satisfies BrowserServer
 func (s *Server) Publish(
 	ctx context.Context, req *browserrpc.PublishRequest,

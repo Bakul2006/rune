@@ -24,6 +24,14 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 )
 
+// The schemes of the remote workspaces that workspacessh and
+// workspacerune implement. They are declared here so that packages can
+// recognize those URIs without linking the network clients behind them.
+const (
+	SSHScheme  = "ssh"
+	RuneScheme = "rune"
+)
+
 func checkURIRelative(a, b workspaceapi.URI) error {
 	if a.Scheme() != b.Scheme() {
 		return fmt.Errorf("unexpected different schemes: %s vs %s",

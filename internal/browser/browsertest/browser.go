@@ -136,6 +136,10 @@ func (b toBrowser) Open(resource workspaceapi.URI) (browserapi.Handler, error) {
 	return b.b.Open(resource)
 }
 
+func (b toBrowser) Show(resource workspaceapi.URI) error {
+	return b.b.Show(resource)
+}
+
 func (b toBrowser) Resource(u workspaceapi.URI) (browserapi.Handler, bool) {
 	return NewTestHandler(), true
 }

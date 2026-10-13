@@ -531,6 +531,8 @@ func (o *mockResourceOpener) Open(uri workspaceapi.URI) (browserapi.Handler, err
 	return h, nil
 }
 
+func (o *mockResourceOpener) Show(workspaceapi.URI) error { return nil }
+
 func (o *mockResourceOpener) openedURIs() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()

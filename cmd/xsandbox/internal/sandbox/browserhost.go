@@ -170,6 +170,16 @@ func (h *browserHost) Open(uri workspaceapi.URI) (browserapi.Handler, error) {
 	return h.comp.NewTab(uri, 0, uri.Name(), browsertest.NewTestHandler(), nil), nil
 }
 
+// Show shows the tab Open opens for uri in the window in focus, whatever
+// its scheme, so a spec can render what an extension showed.
+func (h *browserHost) Show(uri workspaceapi.URI) error {
+	t, _ := h.Open(uri)
+	if err := h.comp.Focus().SetContent(t); err != browserapi.ErrTabNotFree {
+		return err
+	}
+	return nil
+}
+
 func (h *browserHost) Resource(uri workspaceapi.URI) (browserapi.Handler, bool) {
 	return h.comp.Tab(uri)
 }

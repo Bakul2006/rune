@@ -557,6 +557,8 @@ func (b *fakeBrowser) Open(uri workspaceapi.URI) (browserapi.Handler, error) {
 	return b.openHandler, b.openErr
 }
 
+func (b *fakeBrowser) Show(workspaceapi.URI) error { return nil }
+
 func (b *fakeBrowser) Resource(workspaceapi.URI) (browserapi.Handler, bool) {
 	return nil, false
 }

@@ -1096,7 +1096,7 @@ func (h *workspaceManagerHandler) focusOpenFileTarget(
 		}
 		return target.tab, nil
 	}
-	return target.workspace.ex.editFileURILocal(file, target.workspace.ex.invokeWindow(), readOnly)
+	return target.workspace.ex.editFileURI(file, target.workspace.ex.invokeWindow(), readOnly)
 }
 
 func (h *workspaceManagerHandler) RouteOpen(

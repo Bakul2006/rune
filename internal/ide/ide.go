@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"os"
 	"os/user"
 	"path"
@@ -365,10 +364,10 @@ func (i *IDE) DispatchCommand(cmd string, args ...string) error {
 	return i.workspaceHandler.focusEx().dispatchCommand(cmd, args...)
 }
 
-// OpenURL opens a URL the user clicked as the focused workspace's
-// meta_open_url config says. It must run on the event loop.
-func (i *IDE) OpenURL(u *url.URL) error {
-	return i.workspaceHandler.focusEx().openURL(u)
+// Show shows uri in the focused workspace as browser.Browser.Show does.
+// It must run on the event loop.
+func (i *IDE) Show(uri workspaceapi.URI) error {
+	return i.workspaceHandler.focusEx().comp.Show(uri)
 }
 
 // Models returns the models available through the IDE's host-side LLM

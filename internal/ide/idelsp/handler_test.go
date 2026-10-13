@@ -2534,3 +2534,5 @@ func (m *mockResourceOpener) Open(
 	}
 	return nil, nil
 }
+
+func (m *mockResourceOpener) Show(workspaceapi.URI) error { return nil }

@@ -107,6 +107,8 @@ type Config struct {
 	// whether it did. Links it declines, or every link when it is nil,
 	// only scroll to the in-document anchors they name.
 	OnLinkClick func(*url.URL) bool
+	// OpenURL opens the URIs Show does not open in a tab.
+	OpenURL func(*url.URL) error
 	// StreamingOpen enables the async streaming file-open path.
 	// When true, OpenFileTab returns a lightweight read-only
 	// streaming handler immediately and runs workspace.Load on a
@@ -826,6 +828,13 @@ func WithOpenRouter(r OpenRouter) Option {
 func WithOnLinkClick(fn func(*url.URL) bool) Option {
 	return func(cfg *Config) {
 		cfg.OnLinkClick = fn
+	}
+}
+
+// WithOpenURL sets Config.OpenURL.
+func WithOpenURL(fn func(*url.URL) error) Option {
+	return func(cfg *Config) {
+		cfg.OpenURL = fn
 	}
 }
 

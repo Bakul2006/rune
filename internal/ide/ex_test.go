@@ -6650,6 +6650,50 @@ func TestOnLinkClick(t *testing.T) {
 	assert.Equal(t, []string{"open https://example.com/%24: boom"}, notes.errorMessages())
 }
 
+func TestBrowserShow(t *testing.T) {
+	cases := []struct {
+		name     string
+		show     string
+		wantSink [][]string
+		wantTab  bool
+	}{
+		{
+			name:     "https opens as meta_open_url says",
+			show:     "https://example.com/docs",
+			wantSink: [][]string{{"https://example.com/docs"}},
+		},
+		{name: "file opens a focused editor tab", show: "file:///show.go", wantTab: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newExForAliasRun(t, nil)
+			defer b.Close()
+			var sink [][]string
+			require.NoError(t, b.comp.SubscribeCommand(
+				textapi.CommandManual{Name: "sink"},
+				text.FuncCommandHandler(func(_ context.Context, cmd textapi.Command) error {
+					sink = append(sink, cmd.Args)
+					return nil
+				}, nil)))
+			b.ex.metaOpenURL = metaOpenURLConfig{command: "sink $URL"}
+			uri, err := workspaceapi.ParseURI(tc.show)
+			require.NoError(t, err)
+
+			require.NoError(t, b.Browser().Show(uri))
+			b.drainAliasRuns()
+
+			assert.Equal(t, tc.wantSink, sink)
+			tab, ok := b.comp.FocusTab()
+			if tc.wantTab {
+				require.True(t, ok, "the shown file must be in focus")
+				assert.Equal(t, tc.show, tab.URI().String())
+			} else {
+				assert.False(t, ok, "a URL must not open a tab")
+			}
+		})
+	}
+}
+
 func TestSwitchToTab(t *testing.T) {
 	cases := []handlertest.SequenceTestCase{
 		{":edit hello.go>B:edit world.go>",

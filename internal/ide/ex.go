@@ -537,7 +537,8 @@ func (e *ex) doInit(
 	e.config = text.DefaultConfig()
 
 	opts = append(opts, text.WithNotifications(e.notifications),
-		text.WithOnLinkClick(e.onLinkClick))
+		text.WithOnLinkClick(e.onLinkClick),
+		text.WithOpenURL(e.openURL))
 	for _, o := range opts {
 		o(&e.config)
 	}
@@ -1324,52 +1325,7 @@ func formatStep(cmd textapi.Command) string {
 func (e *ex) editFileURI(uri workspaceapi.URI, win browser.Window, readOnly bool) (
 	*browser.Tab, error,
 ) {
-	return e.editFileURILocal(uri, win, readOnly)
-}
-
-func (e *ex) editFileURILocal(uri workspaceapi.URI, win browser.Window, readOnly bool) (
-	*browser.Tab, error,
-) {
-	var h browserapi.Handler
-	var err error
-	if readOnly {
-		h, err = e.comp.OpenReadOnly(uri)
-	} else {
-		h, err = e.comp.Open(uri)
-	}
-	if err != nil {
-		return nil, err
-	}
-	if win.Closed() {
-		win, _ = e.comp.Focus()
-	}
-	err = win.SetContent(h)
-	if err == browserapi.ErrTabNotFree {
-		// The tab is already rendered in a window. If that window
-		// is ours (the file was already open in this workspace),
-		// focus it so <enter> brings it into view. Otherwise the
-		// multi-workspace OpenRouter already switched to and
-		// focused the owning workspace, so there is nothing left
-		// to do here.
-		err = nil
-		if owner, ok := e.localTabWindow(h.(*browser.Tab)); ok {
-			_, _ = e.comp.SetFocus(owner)
-		}
-	}
-	return h.(*browser.Tab), err
-}
-
-// localTabWindow returns the window of this ex's browser that
-// currently renders tab, if any. The lookup is scoped to this ex's
-// own windows by ID: a tab routed in from another workspace belongs
-// to a different window manager, and SetFocus panics on a foreign
-// window.
-func (e *ex) localTabWindow(tab *browser.Tab) (browser.Window, bool) {
-	owner, ok := tab.Window()
-	if !ok || owner.Closed() {
-		return nil, false
-	}
-	return e.comp.Browser().Window(owner.WindowID())
+	return e.comp.OpenInWindow(uri, win, readOnly)
 }
 
 func (e *ex) parseURIOrWorkspaceURI(path string) (workspaceapi.URI, error) {

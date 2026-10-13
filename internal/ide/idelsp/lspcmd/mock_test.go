@@ -246,6 +246,8 @@ func (m *mockResourceOpener) Open(uri workspaceapi.URI) (browserapi.Handler, err
 	return nil, nil
 }
 
+func (m *mockResourceOpener) Show(workspaceapi.URI) error { return nil }
+
 // mockNotifications implements browserapi.Notifications.
 type mockNotifications struct {
 	notifyFn func(browserapi.NotificationLevel, string, ...any) (string, error)

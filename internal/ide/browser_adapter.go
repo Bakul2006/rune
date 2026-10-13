@@ -126,6 +126,10 @@ func (a browserAdapter) Open(
 	return a.b.Open(uri)
 }
 
+func (a browserAdapter) Show(uri workspaceapi.URI) error {
+	return a.b.Show(uri)
+}
+
 func (a browserAdapter) Notify(
 	level browserapi.NotificationLevel,
 	msg string,

@@ -1169,6 +1169,20 @@ func (mr *MockResourceOpenerMockRecorder) Resource(arg0 any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resource", reflect.TypeOf((*MockResourceOpener)(nil).Resource), arg0)
 }
 
+// Show mocks base method.
+func (m *MockResourceOpener) Show(resource workspaceapi.URI) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Show", resource)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Show indicates an expected call of Show.
+func (mr *MockResourceOpenerMockRecorder) Show(resource any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Show", reflect.TypeOf((*MockResourceOpener)(nil).Show), resource)
+}
+
 // MockEventPublisher is a mock of EventPublisher interface.
 type MockEventPublisher struct {
 	ctrl     *gomock.Controller
@@ -1555,6 +1569,20 @@ func (m *MockBrowser) SetTabStatus(uri workspaceapi.URI, report programstatus.Re
 func (mr *MockBrowserMockRecorder) SetTabStatus(uri, report any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTabStatus", reflect.TypeOf((*MockBrowser)(nil).SetTabStatus), uri, report)
+}
+
+// Show mocks base method.
+func (m *MockBrowser) Show(resource workspaceapi.URI) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Show", resource)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Show indicates an expected call of Show.
+func (mr *MockBrowserMockRecorder) Show(resource any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Show", reflect.TypeOf((*MockBrowser)(nil).Show), resource)
 }
 
 // Split mocks base method.

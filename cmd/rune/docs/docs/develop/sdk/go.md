@@ -104,7 +104,7 @@ returns a typed client into the host:
 | `extensionapi` | Handshake, `Workspace`, command registration | (none) |
 | `textapi` | Editor and text operations, editor events, commands | `Editor`, `RegisterCommand` |
 | `storageapi` | Document storage and persistence | `Storage` |
-| `browserapi` | Windows, tabs, resource opening, notifications | `WindowManager`, `ResourceOpener`, `Notifications` |
+| `browserapi` | Windows, tabs, opening files and links, notifications | `WindowManager`, `ResourceOpener`, `Notifications` |
 | `workspaceapi` | URI resolution, file operations, watchers, command execution | `FileSystem`, `Executor` |
 | `semanticapi` | Language-server operations (definition, references, rename, diagnostics, and more) | `LSP` |
 | `llmapi` | LLM access (models, token counting, messages) | `LLM` |

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -735,6 +736,68 @@ func (c *Component) OpenReadOnly(file workspaceapi.URI) (browserapi.Handler, err
 		c.openRecoveryPrompt(file)
 	}
 	return h, err
+}
+
+// OpenInWindow opens file as Open does, or as OpenReadOnly does when
+// readOnly, and shows its tab in win, or in the window in focus when win
+// is closed. When the tab is already shown in another window of this
+// browser, that window takes focus instead.
+func (c *Component) OpenInWindow(
+	file workspaceapi.URI, win browser.Window, readOnly bool,
+) (*browser.Tab, error) {
+	open := c.Open
+	if readOnly {
+		open = c.OpenReadOnly
+	}
+	h, err := open(file)
+	if err != nil {
+		return nil, err
+	}
+	if win.Closed() {
+		win = c.comp.Focus()
+	}
+	t := h.(*browser.Tab)
+	err = win.SetContent(t)
+	if err == browserapi.ErrTabNotFree {
+		// When the window showing the tab is not ours, the OpenRouter
+		// already switched to and focused the workspace that owns it.
+		err = nil
+		if owner, ok := c.tabWindow(t); ok {
+			c.comp.SetFocus(owner)
+		}
+	}
+	return t, err
+}
+
+// tabWindow returns the window of this browser that shows tab. It looks
+// the window up by ID because a tab routed in from another workspace is
+// shown by another browser, and SetFocus panics on a foreign window.
+func (c *Component) tabWindow(tab *browser.Tab) (browser.Window, bool) {
+	owner, ok := tab.Window()
+	if !ok || owner.Closed() {
+		return nil, false
+	}
+	return c.comp.Window(owner.WindowID())
+}
+
+// Show satisfies browser.Browser. URIs on the schemes of the workspaces
+// Rune supports (file, ssh and rune) open as OpenInWindow does in the
+// window in focus. Every other URI goes to Config.OpenURL, and Show fails
+// for them when it is nil.
+func (c *Component) Show(uri workspaceapi.URI) error {
+	switch uri.Scheme() {
+	case workspace.FileScheme, workspace.SSHScheme, workspace.RuneScheme:
+		_, err := c.OpenInWindow(uri, c.comp.Focus(), false)
+		return err
+	}
+	if c.config.OpenURL == nil {
+		return fmt.Errorf("cannot open %s: no URL opener", uri)
+	}
+	u, err := url.Parse(uri.String())
+	if err != nil {
+		return err
+	}
+	return c.config.OpenURL(u)
 }
 
 // ReadFile injects the contents of the desired file and writes it under the cursor.

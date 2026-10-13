@@ -465,6 +465,8 @@ func (o *recordingOpener) Open(uri workspaceapi.URI) (browserapi.Handler, error)
 	return &stubResource{uri: uri}, nil
 }
 
+func (o *recordingOpener) Show(workspaceapi.URI) error { return nil }
+
 func (o *recordingOpener) openedURIs() []string {
 	o.mu.Lock()
 	defer o.mu.Unlock()

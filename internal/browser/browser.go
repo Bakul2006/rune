@@ -182,9 +182,12 @@ type Notifications interface {
 	UpdateNotificationProgress(id, message string, progress, total int64) error
 }
 
-// ResourceOpener is the interface that wraps the method Open.
+// ResourceOpener is the interface that wraps the methods Open, Show and
+// Resource.
 type ResourceOpener interface {
 	Open(resource workspaceapi.URI) (browserapi.Handler, error)
+	// Show has the contract of browserapi.ResourceOpener.Show.
+	Show(resource workspaceapi.URI) error
 	Resource(workspaceapi.URI) (browserapi.Handler, bool)
 }
 

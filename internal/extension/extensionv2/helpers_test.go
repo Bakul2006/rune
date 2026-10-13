@@ -144,6 +144,8 @@ func (e2eBrowser) Open(workspaceapi.URI) (browserapi.Handler, error) {
 	return browsertest.NewTestHandler(), nil
 }
 
+func (e2eBrowser) Show(workspaceapi.URI) error { return nil }
+
 func (e2eBrowser) Resource(workspaceapi.URI) (browserapi.Handler, bool) {
 	return browsertest.NewTestHandler(), true
 }

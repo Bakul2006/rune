@@ -39,7 +39,6 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/semanticapi"
 	"github.com/unstablebuild/rune-go-sdk/api/textapi"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
-	"github.com/unstablebuild/rune-go-sdk/clipboard"
 	"github.com/unstablebuild/rune-go-sdk/handler/handlertest"
 	"github.com/unstablebuild/rune-go-sdk/term"
 
@@ -1403,95 +1402,63 @@ func TestHandlerWebBrowser(t *testing.T) {
 	}
 }
 
-type recordingNotifications struct {
-	stubNotifications
-	calls     int
-	lastLevel browserapi.NotificationLevel
-	lastMsg   string
-	lastArgs  []any
-}
-
-func (r *recordingNotifications) Notify(level browserapi.NotificationLevel, format string, args ...any) (string, error) {
-	r.calls++
-	r.lastLevel = level
-	r.lastMsg = format
-	r.lastArgs = args
-	return "", nil
-}
-
-type failingClipboard struct {
-	err error
-}
-
-func (f *failingClipboard) Copy(string, clipboard.Data) error {
-	return f.err
-}
-
-func (f *failingClipboard) Paste(string) (clipboard.Data, error) {
-	return clipboard.Data{}, f.err
-}
-
-func TestExtensionDialogue_LinkClick_CopiesToClipboard(t *testing.T) {
-	clip := clipboard.NewInMemory()
-	noti := &recordingNotifications{}
-	ret := &aiEditorHandler{
-		clip: clip,
-		n:    noti,
+func TestExtensionDialogueLinkClick(t *testing.T) {
+	tests := []struct {
+		name        string
+		link        string
+		showErr     error
+		wantHandled bool
+		wantCalls   []string
+	}{
+		{
+			name:        "https is shown",
+			link:        "https://example.com/repo",
+			wantHandled: true,
+			wantCalls:   []string{"show https://example.com/repo"},
+		},
+		{
+			name:        "http is shown",
+			link:        "http://example.com/docs?a=1#b",
+			wantHandled: true,
+			wantCalls:   []string{"show http://example.com/docs?a=1#b"},
+		},
+		{
+			name:        "file is shown",
+			link:        "file:///tmp/main.go",
+			wantHandled: true,
+			wantCalls:   []string{"show file:///tmp/main.go"},
+		},
+		{
+			name:        "failed show notifies",
+			link:        "https://example.com/repo",
+			showErr:     errors.New("no system browser configured"),
+			wantHandled: true,
+			wantCalls: []string{
+				"show https://example.com/repo",
+				"open https://example.com/repo: no system browser configured",
+			},
+		},
+		{name: "anchor is declined", link: "#section"},
+		{name: "relative path is declined", link: "internal/ide/ex.go"},
+		{name: "mailto is declined", link: "mailto:a@example.com"},
 	}
-	// The dialogue holds its lock while it calls OnLinkClick.
-	mu := new(sync.Mutex)
-	mu.Lock()
-	defer mu.Unlock()
-	ret.cfg.OnLinkClick = newLinkClickHandler(mu, ret.clip, ret.n)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lock := &dialogueLock{}
+			io := &linkClickIO{lock: lock, showErr: tt.showErr}
+			h := &aiEditorHandler{o: io, n: io}
+			link, err := url.Parse(tt.link)
+			require.NoError(t, err)
 
-	// Valid https URL
-	u, err := url.Parse("https://example.com/repo")
-	require.NoError(t, err)
-	handled := ret.cfg.OnLinkClick(u)
-	assert.True(t, handled)
+			// The dialogue holds its lock while it calls OnLinkClick.
+			lock.Lock()
+			handled := h.dialogueConfig(lock).OnLinkClick(link)
+			lock.Unlock()
 
-	data, err := clip.Paste(clipboard.DefaultRegisterID)
-	require.NoError(t, err)
-	assert.Equal(t, "https://example.com/repo", data.Text)
-	assert.Equal(t, browserapi.LevelSuccess, noti.lastLevel)
-	assert.Contains(t, noti.lastMsg, "copied URL %s to clipboard")
-
-	// Valid http URL
-	uHTTP, err := url.Parse("http://example.com/docs")
-	require.NoError(t, err)
-	handled = ret.cfg.OnLinkClick(uHTTP)
-	assert.True(t, handled)
-	data, err = clip.Paste(clipboard.DefaultRegisterID)
-	require.NoError(t, err)
-	assert.Equal(t, "http://example.com/docs", data.Text)
-
-	// Non-http URL (fragment / anchor)
-	noti.calls = 0
-	uAnchor, err := url.Parse("#section")
-	require.NoError(t, err)
-	handled = ret.cfg.OnLinkClick(uAnchor)
-	assert.False(t, handled)
-	assert.Equal(t, 0, noti.calls)
-
-	// Non-http URL (file scheme)
-	noti.calls = 0
-	uFile, err := url.Parse("file:///etc/passwd")
-	require.NoError(t, err)
-	handled = ret.cfg.OnLinkClick(uFile)
-	assert.False(t, handled)
-	assert.Equal(t, 0, noti.calls)
-
-	// Clipboard error notification
-	failClip := &failingClipboard{err: errors.New("clipboard failure")}
-	retFail := &aiEditorHandler{
-		clip: failClip,
-		n:    noti,
+			assert.Equal(t, tt.wantHandled, handled)
+			assert.Equal(t, tt.wantCalls, io.calls)
+		})
 	}
-	retFail.cfg.OnLinkClick = newLinkClickHandler(mu, retFail.clip, retFail.n)
-	handled = retFail.cfg.OnLinkClick(u)
-	assert.True(t, handled)
-	assert.Equal(t, browserapi.LevelError, noti.lastLevel)
-	assert.Contains(t, noti.lastMsg, "copy URL to clipboard: %v")
 }
 
 // dialogueLock is a dialogue's sync.Locker. It counts the misuse a
@@ -1515,26 +1482,27 @@ func (l *dialogueLock) Unlock() {
 	l.mu.Unlock()
 }
 
-// linkClickIO is a clipboard and notifications that record each call,
-// marking the ones made while lock was held.
+// linkClickIO is a resource opener and notifications that record each
+// call, marking the ones made while lock was held.
 type linkClickIO struct {
 	stubNotifications
-	clipboard.Register
 	lock    *dialogueLock
-	copyErr error
+	showErr error
 	panics  bool
 	calls   []string
 }
 
-func (r *linkClickIO) Copy(registerID string, data clipboard.Data) error {
-	r.record("copy " + data.Text)
+func (r *linkClickIO) Open(uri workspaceapi.URI) (browserapi.Handler, error) {
+	r.record("open tab " + uri.String())
+	return nil, errors.New("unexpected Open")
+}
+
+func (r *linkClickIO) Show(uri workspaceapi.URI) error {
+	r.record("show " + uri.String())
 	if r.panics {
-		panic("clipboard utility crashed")
+		panic("host connection lost")
 	}
-	if r.copyErr != nil {
-		return r.copyErr
-	}
-	return r.Register.Copy(registerID, data)
+	return r.showErr
 }
 
 func (r *linkClickIO) Notify(
@@ -1560,26 +1528,26 @@ func TestDialogueLinkClickLock(t *testing.T) {
 	tests := []struct {
 		name      string
 		link      string
-		copyErr   error
+		showErr   error
 		panics    bool
 		wantCalls []string
 	}{
 		{
-			name:      "copy runs unlocked",
+			name:      "show runs unlocked",
 			link:      link,
-			wantCalls: []string{"copy " + link, "copied URL " + link + " to clipboard"},
+			wantCalls: []string{"show " + link},
 		},
 		{
-			name:      "failed copy notifies unlocked",
+			name:      "failed show notifies unlocked",
 			link:      link,
-			copyErr:   errors.New("clipboard unavailable"),
-			wantCalls: []string{"copy " + link, "copy URL to clipboard: clipboard unavailable"},
+			showErr:   errors.New("host refused"),
+			wantCalls: []string{"show " + link, "open " + link + ": host refused"},
 		},
 		{
-			name:      "panicking copy hands the lock back",
+			name:      "panicking show hands the lock back",
 			link:      link,
 			panics:    true,
-			wantCalls: []string{"copy " + link},
+			wantCalls: []string{"show " + link},
 		},
 		{
 			name: "declined link does no I/O",
@@ -1590,12 +1558,11 @@ func TestDialogueLinkClickLock(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lock := &dialogueLock{}
 			io := &linkClickIO{
-				Register: clipboard.NewInMemory(),
-				lock:     lock,
-				copyErr:  tt.copyErr,
-				panics:   tt.panics,
+				lock:    lock,
+				showErr: tt.showErr,
+				panics:  tt.panics,
 			}
-			h := &aiEditorHandler{clip: io, n: io}
+			h := &aiEditorHandler{o: io, n: io}
 			comp := h.newDialogueComponent(lock)
 			dh, tx, _ := dialoguetui.Handler(context.Background(), lock, comp, term.NopInterrupter())
 			defer close(tx)

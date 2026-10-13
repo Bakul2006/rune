@@ -47,7 +47,7 @@ import (
 )
 
 // Scheme is the URL scheme implemented by this package.
-const Scheme = "rune"
+const Scheme = workspace.RuneScheme
 
 // ErrConnectionClosed is reported when a mesh connection to a peer
 // drops mid-session.

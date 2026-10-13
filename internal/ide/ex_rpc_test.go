@@ -20,13 +20,17 @@ import (
 	"context"
 	"net"
 	_ "net/http/pprof"
+	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/unstablebuild/rune-go-sdk/api/browserapi"
 	"github.com/unstablebuild/rune-go-sdk/api/browserapi/browserrpc"
+	"github.com/unstablebuild/rune-go-sdk/api/extensionapi"
 	"github.com/unstablebuild/rune-go-sdk/api/schemeapi"
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi/storagestub"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
@@ -34,9 +38,12 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"github.com/unstablebuild/rune-go-sdk/tui"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"unstable.build/rune/internal/browser"
 	tbrowserrpc "unstable.build/rune/internal/browser/browserrpc"
 	"unstable.build/rune/internal/browser/browsertest"
+	"unstable.build/rune/internal/debug"
+	"unstable.build/rune/internal/extension"
 	"unstable.build/rune/internal/ide/plugin"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/text"
@@ -218,4 +225,52 @@ func TestRPCBrowserCloseLeak(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, win.Close())
+}
+
+func TestRPCShow(t *testing.T) {
+	b := newExForAliasRun(t, nil)
+	defer b.Close()
+	var system []string
+	b.ex.metaOpenURL = metaOpenURLConfig{system: func(u *url.URL) error {
+		system = append(system, u.String())
+		return nil
+	}}
+	var interrupts atomic.Int32
+	res := extension.BrowserResources(b.Browser(), func(ev term.Event) bool {
+		if ev.Type == term.EventInterrupt {
+			interrupts.Add(1)
+		}
+		return true
+	})
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	grpcServer := grpc.NewServer()
+	defer grpcServer.Stop()
+	closer, err := res[extensionapi.PermissionBrowserResourceOpener].
+		Register(grpcServer, new(sync.Mutex))
+	require.NoError(t, err)
+	defer closer.Close()
+	go debug.CapturePanicReport(func() { _ = grpcServer.Serve(lis) })
+	conn, err := grpc.NewClient(lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	client := browserrpc.NewClient(context.Background(), conn)
+	defer client.Close()
+
+	file, err := workspaceapi.ParseURI("file:///shown.go")
+	require.NoError(t, err)
+	require.NoError(t, client.Show(file))
+	tab, ok := b.comp.FocusTab()
+	require.True(t, ok, "the shown file must be in focus")
+	assert.Equal(t, file.String(), tab.URI().String())
+
+	web, err := workspaceapi.ParseURI("https://example.com/docs")
+	require.NoError(t, err)
+	require.NoError(t, client.Show(web))
+	assert.Equal(t, []string{"https://example.com/docs"}, system)
+	assert.EqualValues(t, 2, interrupts.Load(), "every Show must redraw")
+
+	b.ex.metaOpenURL.system = nil
+	require.ErrorContains(t, client.Show(web), "no system browser")
 }

@@ -259,3 +259,19 @@ func TestPluginPermissionProgramStorageKeyIgnoresArgs(t *testing.T) {
 	assert.NotEqual(t, keyA, argKey,
 		"program-scoped key must not collide with the argv-scoped key")
 }
+
+func TestPermissionActionText(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		permission extensionapi.Permission
+		want       string
+	}{
+		{extensionapi.PermissionBrowserWindowManager, "manage the window manager"},
+		{extensionapi.PermissionBrowserResourceOpener, "open files and links"},
+	} {
+		t.Run(string(tc.permission), func(t *testing.T) {
+			assert.Equal(t, tc.want, PermissionActionText(tc.permission))
+		})
+	}
+}

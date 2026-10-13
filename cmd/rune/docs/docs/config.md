@@ -398,8 +398,8 @@ For ready-to-copy `exo` configs (Vim, Neovim, Helix, Nano, and more), see the
 ## Links
 
 - `meta_open_url`: how an `http://` or `https://` link opens when you click it
-  in a markdown tab, a hover, a workspace notice or the cheatsheet, or click
-  it with `<meta>` held in the GUI. It takes one of:
+  in a markdown tab, a hover, a workspace notice, the cheatsheet or a Rune
+  Agent reply, or click it with `<meta>` held in the GUI. It takes one of:
 
   - `"system"`, the default: open the link in your system browser.
   - `"clipboard"`: copy the link to the clipboard.

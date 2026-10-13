@@ -246,6 +246,76 @@ func TestServerSetTabStatus(t *testing.T) {
 	})
 }
 
+func TestServerShow(t *testing.T) {
+	tests := []struct {
+		name     string
+		resource string
+		showErr  error
+		wantURI  string
+		wantCode codes.Code
+		wantErr  string
+	}{
+		{
+			name:     "file",
+			resource: "file:///tmp/main.go",
+			wantURI:  "file:///tmp/main.go",
+		},
+		{
+			name:     "https",
+			resource: "https://example.com/a?b=c#d",
+			wantURI:  "https://example.com/a?b=c#d",
+		},
+		{
+			name:     "bubbles up show error",
+			resource: "https://example.com/docs",
+			showErr:  errors.New("no system browser configured"),
+			wantURI:  "https://example.com/docs",
+			wantErr:  "no system browser configured",
+		},
+		{
+			name:     "malformed resource",
+			resource: "%zz",
+			wantCode: codes.InvalidArgument,
+		},
+		{
+			name:     "relative resource",
+			resource: "#section",
+			wantCode: codes.InvalidArgument,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mu := new(sync.Mutex)
+			s, mock := newTestServer(ctrl, mu)
+			var shown []string
+			mock.EXPECT().Show(gomock.Any()).AnyTimes().DoAndReturn(
+				func(uri workspaceapi.URI) error {
+					assert.False(t, mu.TryLock(), "must be called under the UI lock")
+					shown = append(shown, uri.String())
+					return tt.showErr
+				})
+
+			res, err := s.Show(context.Background(),
+				&browserrpc.ShowResourceRequest{Resource: tt.resource})
+
+			switch {
+			case tt.wantCode != codes.OK:
+				assert.Equal(t, tt.wantCode, status.Code(err))
+				assert.Empty(t, shown)
+			case tt.wantErr != "":
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.Equal(t, []string{tt.wantURI}, shown)
+			default:
+				require.NoError(t, err)
+				assert.NotNil(t, res)
+				assert.Equal(t, []string{tt.wantURI}, shown)
+			}
+		})
+	}
+}
+
 func TestServerPublish(t *testing.T) {
 	ctx := context.Background()
 
