@@ -237,6 +237,8 @@ func newREPLRig(t *testing.T) *replRig {
 		sched.schedule,
 		ti,
 		commandEditor{te: standard.Editor()},
+		&fakeWM{},
+		workspaceapi.URI{},
 		cfg,
 	)
 	require.NoError(t, registry.RegisterREPLCommand(

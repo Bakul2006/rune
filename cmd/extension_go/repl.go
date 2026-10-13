@@ -132,12 +132,19 @@ func (h *replSubcommand) HandleCommand(
 		return fmt.Errorf("resolve module uri: %w", err)
 	}
 
+	uri, err := h.fs.URI(replTabURI)
+	if err != nil {
+		return fmt.Errorf("resolve repl uri: %w", err)
+	}
+
 	sched := newTickScheduler(h.interrupter)
 	editor, modal := h.resolveEditor()
 	shell, registry := ideconsole.New(
 		sched.schedule,
 		h.interrupter,
 		editor,
+		h.wm,
+		uri,
 		h.shellConfig(session, moduleURI, modal),
 	)
 	if err := registry.RegisterREPLCommand(
@@ -149,11 +156,6 @@ func (h *replSubcommand) HandleCommand(
 	); err != nil {
 		_ = shell.Close()
 		return fmt.Errorf("register go repl command: %w", err)
-	}
-
-	uri, err := h.fs.URI(replTabURI)
-	if err != nil {
-		return fmt.Errorf("resolve repl uri: %w", err)
 	}
 
 	wrapped := &drainHandler{Handler: shell, sched: sched}

@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi/storagestub"
+	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/component"
 	"github.com/unstablebuild/rune-go-sdk/handler/repl"
 	"github.com/unstablebuild/rune-go-sdk/iterator"
@@ -60,6 +61,8 @@ func newTestHandlerFull(
 		q.schedule,
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{
 			Storage:           svc,
 			HistoryDocumentID: testDocID,
@@ -1544,7 +1547,7 @@ func newMouseTestHandler(t *testing.T, w, h int, lines []string) (*Handler, *ter
 		mu.Unlock()
 		return true
 	}
-	hd, reg := New(sched, term.NopInterrupter(), stubEditor{}, Config{MaxHistory: 100})
+	hd, reg := New(sched, term.NopInterrupter(), stubEditor{}, &recordingTabs{}, workspaceapi.URI{}, Config{MaxHistory: 100})
 	reg.Register("show", "print lines", linesCmd{lines: lines})
 	t.Cleanup(func() { _ = hd.Close() })
 
@@ -1688,6 +1691,8 @@ func TestHandlerCtrlLRunsClearHook(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100, ClearHook: func() { cleared++ }},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -1788,7 +1793,7 @@ func TestHandlerCtrlLIgnoredWhileCommandRunning(t *testing.T) {
 		release: make(chan struct{}),
 		closed:  make(chan struct{}),
 	}
-	hd, reg := New(sched, term.NopInterrupter(), stubEditor{}, Config{MaxHistory: 100})
+	hd, reg := New(sched, term.NopInterrupter(), stubEditor{}, &recordingTabs{}, workspaceapi.URI{}, Config{MaxHistory: 100})
 	reg.Register("block", "blocks", cmd)
 	t.Cleanup(func() { _ = hd.Close() })
 	hd.Resize(w, h)

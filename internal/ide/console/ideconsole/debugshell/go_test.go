@@ -1138,10 +1138,18 @@ func newFakeShellHandler() *ideconsole.Handler {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		nopShellEditor{},
+		nopShellTabs{},
+		workspaceapi.URI{},
 		ideconsole.Config{},
 	)
 	return h
 }
+
+// nopShellTabs is an ideconsole.TabManager for a shell handler that is
+// never driven.
+type nopShellTabs struct{}
+
+func (nopShellTabs) SetTabStatus(workspaceapi.URI, browserapi.TabStatus) error { return nil }
 
 // nopShellEditor is a minimal command.Editor for tests that need an
 // *ideconsole.Handler purely as a content-type marker. The spawned

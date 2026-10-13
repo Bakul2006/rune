@@ -1452,6 +1452,43 @@ func TestShellCommandPastesArgument(t *testing.T) {
 	assert.Equal(t, prev, len(doc.Items))
 }
 
+func TestConsoleCommandReportsTabStatus(t *testing.T) {
+	workspaceURI, err := workspaceapi.ParseURI("file:///tmp/console-status")
+	require.NoError(t, err)
+	w := testWorkspaceWithURI{testLoader: &testLoader{}, uri: workspaceURI}
+	cfg := vte.DefaultConfig()
+	scheduler := newQueuedScheduler()
+	cfg.ScheduleNextTick = scheduler.ScheduleNextTick
+	b := newExForTestingWithStorage(t, w, storagestub.NewInMemoryService(), texttest.NopEditor(),
+		cfg, nopPublishEvent, clipboard.NewInMemory(),
+		text.WithCommandKey(testCommandKey),
+	)
+	b.mu = &sync.Mutex{}
+	b.scheduler = scheduler
+	defer b.Close()
+
+	require.NoError(t, b.consolenewtab(context.Background()))
+	_, handled := b.Handle(term.Event{Type: term.EventUnfocus})
+	require.True(t, handled)
+
+	require.NoError(t, b.consolenewtab(context.Background(), "help"))
+	b.ex.companionConsole.Wait()
+	b.flushScheduled()
+	status, ok := b.comp.Browser().TabStatus(b.ex.companionConsoleURI)
+	require.True(t, ok)
+	assert.Equal(t, programstatus.Done, status.State, "a command that ended out of sight is done")
+	require.Len(t, status.Records, 1)
+	assert.Equal(t, programstatus.Report{
+		ID: "1", State: programstatus.Done, Progress: -1, App: programstatus.HostApp, Title: "help",
+	}, status.Records[0].Report)
+
+	_, handled = b.Handle(term.Event{Type: term.EventFocus})
+	require.True(t, handled)
+	status, _ = b.comp.Browser().TabStatus(b.ex.companionConsoleURI)
+	assert.Equal(t, programstatus.Idle, status.State, "the host terminal regained focus")
+	assert.Empty(t, status.Records)
+}
+
 func TestDebuggerCommandOpensShellWithDebugger(t *testing.T) {
 	workspaceURI, err := workspaceapi.ParseURI("file:///tmp/debugger-noargs")
 	require.NoError(t, err)

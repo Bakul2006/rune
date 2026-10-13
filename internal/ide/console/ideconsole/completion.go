@@ -48,10 +48,12 @@ type capturedCompletion struct {
 // the original candidates so Handler can render them in a search.List
 // overlay instead of cycling through them inline.
 //
-// HandleCommand is delegated unmodified, since command execution does
-// not interact with completion.
+// Every command the Handler runs goes through HandleCommand, which
+// tracks it while in flight and reports its status on the Handler's
+// tab.
 type completionShim struct {
 	underlying repl.CommandHandler
+	status     *commandStatus
 
 	captured capturedCompletion
 	hasCap   bool
@@ -70,12 +72,14 @@ type completionShim struct {
 func (s *completionShim) HandleCommand(
 	ctx context.Context, cmd repl.Command, pw repl.ProgressWriter,
 ) (iterator.Iterator[component.Responsive], error) {
-	iter, err := s.underlying.HandleCommand(ctx, cmd, pw)
+	run := s.status.start(ctx, cmd, pw)
+	iter, err := s.underlying.HandleCommand(ctx, cmd, run)
 	if err != nil {
+		run.end(err)
 		return nil, err
 	}
 	s.inFlight.Add(1)
-	return &trackedIterator{Iterator: iter, shim: s}, nil
+	return &trackedIterator{Iterator: iter, shim: s, run: run}, nil
 }
 
 // running reports whether a dispatched command's output iterator is
@@ -87,16 +91,18 @@ func (s *completionShim) running() bool {
 
 // trackedIterator decrements the shim's in-flight counter when the
 // inner repl closes the command's output iterator, which it does once
-// the iterator is fully drained.
+// the iterator is fully drained, and reports how the command ended.
 type trackedIterator struct {
 	iterator.Iterator[component.Responsive]
 	shim *completionShim
+	run  *commandRun
 	done atomic.Bool
 }
 
 func (t *trackedIterator) Close() error {
 	if t.done.CompareAndSwap(false, true) {
 		t.shim.inFlight.Add(-1)
+		t.run.end(t.Iterator.Err())
 	}
 	return t.Iterator.Close()
 }

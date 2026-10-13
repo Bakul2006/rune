@@ -276,6 +276,8 @@ func TestNewRegistersHelp(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{},
 	)
 
@@ -405,6 +407,8 @@ func TestHelpCommandFallbackWiredByNew(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{DisableShellInterpreter: fallback},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -446,6 +450,8 @@ func TestShellHandlerForwardsProgressToRegisteredCommand(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{},
 	)
 	t.Cleanup(func() { _ = shellHandler.Close() })
@@ -502,6 +508,8 @@ func TestDisableShellInterpreterBypassesSh(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{DisableShellInterpreter: fallback},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -550,6 +558,8 @@ func TestDefaultShellInterpreterEnabled(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{},
 	)
 	t.Cleanup(func() { _ = h.Close() })

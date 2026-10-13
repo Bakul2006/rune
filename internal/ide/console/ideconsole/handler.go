@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/unstablebuild/rune-go-sdk/api/storageapi"
+	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/component"
 	"github.com/unstablebuild/rune-go-sdk/handler/repl"
 	"github.com/unstablebuild/rune-go-sdk/iterator"
@@ -157,11 +158,15 @@ type Handler struct {
 // only input mode: every key first goes to the spawned EditHandler
 // and only events the editor leaves unhandled fall through to the
 // history-search / completion overlays. editor is required. The
+// Handler reports the status of every command it runs through tabs on
+// the tab at uri, which is meant to show it, until it is closed. The
 // returned registry can be used to register additional commands.
 func New(
 	scheduleNextTick func(func()) bool,
 	interrupter term.Interrupter,
 	editor command.Editor,
+	tabs TabManager,
+	uri workspaceapi.URI,
 	cfg Config,
 	opts ...repl.Option,
 ) (*Handler, *CommandRegistry) {
@@ -200,7 +205,10 @@ func New(
 		}
 		underlying = sh.New(r, cfg.Workspace, shOpts...)
 	}
-	shim := &completionShim{underlying: underlying}
+	shim := &completionShim{
+		underlying: underlying,
+		status:     &commandStatus{tabs: tabs, uri: uri},
+	}
 	inner := repl.New(shim, scheduleNextTick, interrupter, opts...)
 	list := search.NewList(search.ListConfig{
 		Algo:            search.FuzzyMatch,
@@ -274,9 +282,11 @@ func (h *Handler) Submit(line string) {
 	_, _ = h.inner.Handle(enter)
 }
 
-// Close releases both the inner repl handler and the search list.
+// Close releases both the inner repl handler and the search list, and
+// stops reporting command status.
 func (h *Handler) Close() error {
 	h.stopCompletionStream()
+	h.shim.status.close()
 	err := h.inner.Close()
 	if h.list != nil {
 		if cerr := h.list.Close(); cerr != nil && err == nil {

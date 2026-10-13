@@ -169,6 +169,8 @@ func newEditTestHandler(t *testing.T, editor command.Editor) *Handler {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		editor,
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{
 			MaxHistory: 100,
 		},
@@ -199,6 +201,8 @@ func TestSignatureHelpHintOnOpenParen(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100, DisableShellInterpreter: helper},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -222,6 +226,8 @@ func TestSignatureHelpHintNeverStealsKeys(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100, DisableShellInterpreter: helper},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -243,6 +249,8 @@ func newSigHelpHandler(t *testing.T) *Handler {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100, DisableShellInterpreter: helper},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -326,6 +334,8 @@ func TestModalStartInsertForwardsInsertKey(t *testing.T) {
 				func(func()) bool { return false },
 				term.NopInterrupter(),
 				stubEditor{seen: &seen},
+				&recordingTabs{},
+				workspaceapi.URI{},
 				Config{
 					MaxHistory:       100,
 					Modal:            tt.modal,
@@ -344,6 +354,8 @@ func TestEditorSubmitDispatchesAndClears(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -365,6 +377,8 @@ func TestModalEnterSubmitsAndClears(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100, Modal: true},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -387,6 +401,8 @@ func TestShiftEnterInsertsNewlineNotSubmit(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{seen: &seen},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -427,6 +443,8 @@ func TestShiftEnterInsertsLiteralNewline(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		realModelessEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -448,6 +466,8 @@ func TestNewPanicsWithoutEditor(t *testing.T) {
 			func(func()) bool { return false },
 			term.NopInterrupter(),
 			nil,
+			&recordingTabs{},
+			workspaceapi.URI{},
 			Config{},
 		)
 	})
@@ -770,6 +790,8 @@ func TestTabTriggersCompletion(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -795,6 +817,8 @@ func TestTabNeverReachesEditor(t *testing.T) {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		stubEditor{seen: &seen},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100},
 	)
 	t.Cleanup(func() { _ = h.Close() })
@@ -849,6 +873,8 @@ func TestCtrlCCancelsRunningCommandBeforeEditor(t *testing.T) {
 		sched,
 		term.NopInterrupter(),
 		stubEditor{seen: &seen},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{MaxHistory: 100},
 	)
 	t.Cleanup(func() {
@@ -987,6 +1013,8 @@ func newPromptEditorHandler(t *testing.T, items []string) *Handler {
 		func(func()) bool { return false },
 		term.NopInterrupter(),
 		promptStandardEditor{},
+		&recordingTabs{},
+		workspaceapi.URI{},
 		Config{
 			Storage:           svc,
 			HistoryDocumentID: testDocID,

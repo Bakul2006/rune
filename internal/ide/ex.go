@@ -66,6 +66,7 @@ import (
 	"unstable.build/rune/internal/ide/plugin"
 	"unstable.build/rune/internal/ide/vctrl"
 	tterm "unstable.build/rune/internal/term"
+	"unstable.build/rune/internal/term/programstatus"
 	"unstable.build/rune/internal/term/vte"
 	"unstable.build/rune/internal/term/vte/vtereservoir"
 	"unstable.build/rune/internal/text"
@@ -2371,6 +2372,18 @@ func (e *ex) consolenewtab(_ context.Context, args ...string) error {
 		if err != nil {
 			return fmt.Errorf("workspace uri: %w", err)
 		}
+		uri, err := workspaceapi.ParseURI("console:///")
+		if err == nil {
+			uri, err = workspaceapi.WithPath(uri, workspaceURI.Path())
+			if workspaceURI.Host() != "" {
+				uri, err = workspaceapi.ParseURI(
+					fmt.Sprintf("console://%s%s", workspaceURI.Host(), workspaceURI.Path()),
+				)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("parse console uri: %w", err)
+		}
 		consoleCfg := ideconsole.Config{
 			Storage:           e.storage,
 			HistoryDocumentID: shellHistoryDocumentID,
@@ -2383,6 +2396,7 @@ func (e *ex) consolenewtab(_ context.Context, args ...string) error {
 		}
 		h, registry := ideconsole.New(
 			e.emulatorConfig.ScheduleNextTick, e, e.promptEditor,
+			scheduledTabStatus{tm: &e.comp, sched: e.sched}, uri,
 			consoleCfg,
 		)
 		if e.wsExecutor != nil {
@@ -2413,19 +2427,6 @@ func (e *ex) consolenewtab(_ context.Context, args ...string) error {
 			}
 		}
 
-		uri, err := workspaceapi.ParseURI("console:///")
-		if err == nil {
-			uri, err = workspaceapi.WithPath(uri, workspaceURI.Path())
-			if workspaceURI.Host() != "" {
-				uri, err = workspaceapi.ParseURI(
-					fmt.Sprintf("console://%s%s", workspaceURI.Host(), workspaceURI.Path()),
-				)
-			}
-		}
-		if err != nil {
-			_ = h.Close()
-			return fmt.Errorf("parse console uri: %w", err)
-		}
 		e.companionConsole = h
 		e.companionConsoleURI = uri
 	}
@@ -2454,6 +2455,26 @@ func (e *ex) consolenewtab(_ context.Context, args ...string) error {
 	if line := strings.TrimSpace(strings.Join(args, " ")); line != "" {
 		e.companionConsole.Submit(line)
 	}
+	return nil
+}
+
+// scheduledTabStatus reports statuses made through the SDK from any
+// goroutine as the host's own, applying them to tm on the event loop
+// sched runs. A status for a uri that is no tab is dropped.
+type scheduledTabStatus struct {
+	tm    browser.TabManager
+	sched func(func()) bool
+}
+
+var _ ideconsole.TabManager = scheduledTabStatus{}
+
+// SetTabStatus satisfies ideconsole.TabManager.
+func (s scheduledTabStatus) SetTabStatus(uri workspaceapi.URI, status browserapi.TabStatus) error {
+	report, err := browser.ReportFromTabStatus(status, programstatus.HostApp)
+	if err != nil {
+		return err
+	}
+	s.sched(func() { _ = s.tm.SetTabStatus(uri, report) })
 	return nil
 }
 

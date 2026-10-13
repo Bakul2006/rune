@@ -1500,6 +1500,8 @@ func newTestREPLHandler(t *testing.T) (*drainHandler, *tickScheduler) {
 		sched.schedule,
 		ti,
 		commandEditor{te: standard.Editor()},
+		&fakeWM{},
+		workspaceapi.URI{},
 		ideconsole.Config{
 			DisableShellInterpreter: newTestSession(newScriptedRunner()),
 			Prompt:                  "go> ",
@@ -1815,7 +1817,7 @@ func TestREPLShellConfigPersistsHistory(t *testing.T) {
 
 	shell, _ := ideconsole.New(
 		func(func()) bool { return false }, &nopInterrupter{},
-		commandEditor{te: standard.Editor()}, cfg,
+		commandEditor{te: standard.Editor()}, &fakeWM{}, workspaceapi.URI{}, cfg,
 	)
 	t.Cleanup(func() { _ = shell.Close() })
 	shell.Resize(80, 24)
