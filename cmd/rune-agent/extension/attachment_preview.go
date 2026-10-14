@@ -365,22 +365,77 @@ func (p *toolCallPreviewer) OpenToolCall(details dialoguetui.ToolCallDetails) {
 	p.mu.Unlock()
 }
 
+// toolPreviewField names a string field of a JSON object that a preview
+// lifts out of the generic JSON block into a fenced block of its own,
+// highlighted as language. A zero field leaves the JSON block as is.
+type toolPreviewField struct {
+	name, language string
+}
+
+// toolPreview specializes the preview of a tool whose arguments or
+// response carry code or terminal output, which reads poorly as an
+// escaped JSON string.
+type toolPreview struct {
+	args, output toolPreviewField
+}
+
+// toolPreviews is keyed by tool name. A call that does not have the
+// expected shape, such as arguments that are still streaming in or an
+// error message in place of a JSON response, gets the generic preview.
+var toolPreviews = map[string]toolPreview{
+	"bash":           {args: toolPreviewField{"command", "bash"}},
+	"run_command":    {args: toolPreviewField{"CommandLine", "bash"}},
+	"exec_command":   {args: toolPreviewField{"cmd", "bash"}, output: toolPreviewField{"output", "text"}},
+	"write_stdin":    {output: toolPreviewField{"output", "text"}},
+	"apply_patch":    {args: toolPreviewField{"patch", "diff"}},
+	"query_ast":      {args: toolPreviewField{"query", "query"}},
+	"query_file_ast": {args: toolPreviewField{"query", "query"}},
+}
+
+// split returns the value of the field in the JSON object raw and the
+// object's remaining fields as indented JSON sorted by key, or "" when
+// none remain. ok is false when f is zero, raw is not an object, or the
+// field is not a non-empty string.
+func (f toolPreviewField) split(raw string) (value, rest string, ok bool) {
+	if f.name == "" {
+		return "", "", false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &fields) != nil {
+		return "", "", false
+	}
+	if json.Unmarshal(fields[f.name], &value) != nil || value == "" {
+		return "", "", false
+	}
+	delete(fields, f.name)
+	if len(fields) == 0 {
+		return value, "", true
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	// Escaping would show <, > and & as \u003c, \u003e and \u0026.
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if enc.Encode(fields) != nil {
+		return "", "", false
+	}
+	return value, strings.TrimSuffix(buf.String(), "\n"), true
+}
+
 func toolCallPreviewMarkdown(details dialoguetui.ToolCallDetails) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", details.Name)
-	if details.Summary != "" {
-		fmt.Fprintf(&b, "%s\n\n", details.Summary)
-	}
-	if details.Args != "" {
-		args := details.Args
-		if json.Valid([]byte(args)) {
-			var formatted bytes.Buffer
-			if json.Indent(&formatted, []byte(args), "", "  ") == nil {
-				args = formatted.String()
-			}
+	spec := toolPreviews[details.Name]
+	if code, rest, ok := spec.args.split(details.Args); ok {
+		// The summary is omitted because every whitelisted tool derives
+		// it from the arguments shown here.
+		writePreviewCode(&b, spec.args.language, code)
+		if rest != "" {
+			b.WriteString("## Arguments\n\n")
+			writePreviewCode(&b, "json", rest)
 		}
-		b.WriteString("## Arguments\n\n")
-		writePreviewCode(&b, "json", args)
+	} else {
+		writeGenericArgs(&b, details)
 	}
 	if details.Output != "" {
 		if details.IsError {
@@ -391,6 +446,11 @@ func toolCallPreviewMarkdown(details dialoguetui.ToolCallDetails) string {
 		if details.MarkdownOutput && !details.IsError {
 			b.WriteString(details.Output)
 			b.WriteByte('\n')
+		} else if text, rest, ok := spec.output.split(details.Output); ok {
+			writePreviewCode(&b, spec.output.language, text)
+			if rest != "" {
+				writePreviewCode(&b, "json", rest)
+			}
 		} else {
 			language := "text"
 			if json.Valid([]byte(details.Output)) {
@@ -406,6 +466,23 @@ func toolCallPreviewMarkdown(details dialoguetui.ToolCallDetails) string {
 		b.WriteString("## Result\n\n_(no output)_\n")
 	}
 	return b.String()
+}
+
+func writeGenericArgs(b *strings.Builder, details dialoguetui.ToolCallDetails) {
+	if details.Summary != "" {
+		writePreviewCode(b, "text", details.Summary)
+	}
+	if details.Args != "" {
+		args := details.Args
+		if json.Valid([]byte(args)) {
+			var formatted bytes.Buffer
+			if json.Indent(&formatted, []byte(args), "", "  ") == nil {
+				args = formatted.String()
+			}
+		}
+		b.WriteString("## Arguments\n\n")
+		writePreviewCode(b, "json", args)
+	}
 }
 
 func writePreviewCode(b *strings.Builder, language, text string) {
