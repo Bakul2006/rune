@@ -69,8 +69,9 @@ func TestPromptReportsAskingPhase(t *testing.T) {
 
 	ev := <-tx
 	require.Equal(t, dialoguetui.MessageEventPrompt, ev.Type)
+	// Prompt sets the phase and reports the tab one after the other.
 	require.Eventually(t, func() bool {
-		return statusPhase(s) == phaseAsking
+		return statusPhase(s) == phaseAsking && len(wm.tabStatuses()) > 0
 	}, time.Second, time.Millisecond)
 	assert.Equal(t, []browserapi.TabStatus{{
 		State: browserapi.TabBlocked, Kind: browserapi.TabKindQuestion, Progress: -1,
