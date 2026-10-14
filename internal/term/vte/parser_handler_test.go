@@ -1287,6 +1287,7 @@ func TestResizeKeepsCursorAfterItsCharacter(t *testing.T) {
 		name                string
 		width, height       int
 		input               string
+		up                  int
 		newWidth, newHeight int
 		expected            string
 	}{
@@ -1325,6 +1326,27 @@ func TestResizeKeepsCursorAfterItsCharacter(t *testing.T) {
 			newWidth: 5, newHeight: 3,
 			expected: "abcde\nfghij\n_    ",
 		},
+		{
+			name:  "narrowing a line that continues below the cursor",
+			width: 10, height: 4,
+			input: "ab\nABCDEFGHIJKLMNOPQRST", up: 1,
+			newWidth: 4, newHeight: 4,
+			expected: "EFGH\nI_KL\nMNOP\nQRST",
+		},
+		{
+			name:  "widening a line that continues below the cursor",
+			width: 5, height: 6,
+			input: "abcdefg\nABCDEFGHIJKL", up: 1,
+			newWidth: 10, newHeight: 6,
+			expected: "abcdefg   \nABCDEFG_IJ\nKL        \n          \n          \n          ",
+		},
+		{
+			name:  "shortening while widening a line that continues below the cursor",
+			width: 5, height: 3,
+			input: "1\n2\n3\n4\nabcdefghijk", up: 2,
+			newWidth: 15, newHeight: 2,
+			expected: "4              \na_cdefghijk    ",
+		},
 	}
 
 	for _, test := range suite {
@@ -1332,6 +1354,9 @@ func TestResizeKeepsCursorAfterItsCharacter(t *testing.T) {
 			p := newInputParserHandler(t, false)
 			p.Resize(test.width, test.height)
 			writeToBuffer(p, test.input)
+			if test.up > 0 {
+				p.MoveUp(test.up)
+			}
 			p.Resize(test.newWidth, test.newHeight)
 			p.Input('_')
 			assertEqualBuf(t, p, test.expected)
@@ -1348,6 +1373,27 @@ func TestResizeKeepsCursorAfterItsCharacter(t *testing.T) {
 		p.RestoreCursorPosition()
 		p.Input('_')
 		assertEqualBuf(t, p, "abcdefghijklm_      \nx                   \n                    ")
+	})
+
+	t.Run("saved cursor after trailing blanks", func(t *testing.T) {
+		p := newInputParserHandler(t, false)
+		p.Resize(10, 4)
+		writeToBuffer(p, "sh ")
+		p.SaveCursorPosition()
+		writeToBuffer(p, "\nx")
+		p.Resize(2, 4)
+		p.RestoreCursorPosition()
+		p.Input('_')
+		assertEqualBuf(t, p, "sh\n _\nx \n  ")
+	})
+
+	t.Run("cursor whose cell scrolls into history stays on screen", func(t *testing.T) {
+		p := newInputParserHandler(t, false)
+		p.Resize(20, 2)
+		writeToBuffer(p, "abcdefghijklmnopqrst")
+		p.CarriageReturn()
+		p.Resize(5, 2)
+		assert.Equal(t, term.Coordinates{}, p.sync.buf.CursorAtScreen())
 	})
 }
 
