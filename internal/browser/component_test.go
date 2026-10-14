@@ -1064,6 +1064,46 @@ func TestComponentRestoreTileLayout(t *testing.T) {
 	require.NotNil(t, content)
 }
 
+func TestComponentRestoreTileLayoutFreesDisplayedTabs(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Frame = false
+	cfg.FrameUnion = false
+	b := NewComponent(cfg)
+	b.Resize(40, 10)
+
+	uri, err := workspaceapi.ParseURI("file:///displayed")
+	require.NoError(t, err)
+	h := newTestHandlerURI(uri)
+	tab := b.NewTab(uri, 'd', "displayed", h, nil)
+	tab.Subscribe(h)
+	discarded := b.Focus()
+	require.NoError(t, discarded.SetContent(tab))
+	freed := h.onFree
+
+	restored := b.RestoreTileLayout(b.TileLayout(),
+		func(uint64) browserapi.Handler { return nil })
+	require.Len(t, restored, 1)
+
+	assert.True(t, discarded.Closed(),
+		"a window discarded by the restore must report closed")
+	_, bound := tab.Window()
+	assert.False(t, bound,
+		"a tab whose window was discarded by the restore must be free")
+	assert.Equal(t, freed+1, h.onFree)
+	assert.False(t, h.closed,
+		"restoring a layout must not close the handler of an open tab")
+
+	id, ok := b.findTabID(tab)
+	require.True(t, ok, "tab must still be present in the bar")
+	require.True(t, b.tabs.OnClick(id))
+	require.NotPanics(t, func() { b.Focus() })
+	assert.Equal(t, restored[discarded.WindowID()], b.Focus())
+	focused, ok := b.FocusTab()
+	require.True(t, ok)
+	assert.Equal(t, tab, focused,
+		"clicking the freed tab must load it into the focused window")
+}
+
 func TestWindowClosedOnClose(t *testing.T) {
 	b := NewComponent(DefaultConfig())
 	h := newTestHandler()

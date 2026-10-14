@@ -4134,6 +4134,66 @@ func TestWorkspaceManagerRestoresOpenTerminalSessions(t *testing.T) {
 		require.NoError(t, m.Close())
 	})
 
+	t.Run("tabs opened by workspaceready before the restore stay focusable", func(t *testing.T) {
+		cfg := defaultConfigWithWrap(false)
+		cfg.cfg["workspace"] = map[string]any{"auto_restore": true}
+		cfg.ringBell = func() {}
+		mu, sched, drain := buildTestSchedulerForCfg(t, &cfg)
+		manager := workspace.NewManager(config.NopConfig(), sched)
+		require.NoError(t, manager.RegisterScheme(workspace.MemoryScheme,
+			workspace.NewMemoryScheme))
+		const terminalWorkspaceScheme = "terminaltest"
+		require.NoError(t, manager.RegisterScheme(terminalWorkspaceScheme,
+			func(ctx context.Context, cfg config.Config, uri workspaceapi.URI) (schemeapi.Scheme, error) {
+				return newTerminalSessionTestScheme(ctx, cfg, uri)
+			}))
+		uri, err := workspaceapi.ParseURI(terminalWorkspaceScheme + ":///workspace")
+		require.NoError(t, err)
+		runner := FuncExtensionsRunner(testRunnerFn)
+
+		m := newTestWorkspaceManagerHandlerWithManagerMu(t, manager, mu, drain,
+			&uri, cfg, runner, nil, t.TempDir(), nil, nopShutdownShaderConfig())
+		t.Cleanup(func() { _ = m.Close() })
+		m.mu.Lock()
+		ex1 := m.exHandler(m.focusHandler())
+		require.NoError(t, ex1.windownew(context.Background(), "right"))
+		require.NoError(t, ex1.terminalnewtab(context.Background(), "previous run"))
+		require.NoError(t, m.commandCloseWorkspace())
+
+		// Reopening runs the queued commands and then restores the
+		// stored session over the layout they built.
+		require.NoError(t, m.addWorkspace(uri, true, false, -1))
+		for _, cmd := range [][]string{
+			{"windowcloseall"},
+			{"windownew", "left"},
+			{"terminalnewtab", "this run"},
+		} {
+			require.NoError(t, m.commandWorkspaceReady(cmd...))
+		}
+		m.mu.Unlock()
+		m.waitForWorkspace(t, uri)
+
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.Resize(80, 24)
+		ex2 := m.exHandler(m.focusHandler())
+		tabs := ex2.comp.Tabs()
+		require.Len(t, tabs, 2)
+		for _, tab := range tabs {
+			win, bound := tab.Window()
+			if !bound {
+				continue
+			}
+			require.False(t, win.Closed(),
+				"tab %s must not stay bound to a window the restore discarded",
+				tab.URI())
+			// What clicking the tab in the tab bar does.
+			_, err := ex2.comp.SetFocus(win)
+			require.NoError(t, err)
+			require.NotPanics(t, func() { _, _ = ex2.comp.Focus() })
+		}
+	})
+
 	t.Run("workspace reload preserves deep layout with minimized task", func(t *testing.T) {
 		dir, err := os.MkdirTemp("", "")
 		require.NoError(t, err)

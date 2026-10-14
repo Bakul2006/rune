@@ -908,6 +908,16 @@ func (c *Component) RestoreTileLayout(
 	layout tcomponent.TileLayout,
 	content func(windowID uint64) browserapi.Handler,
 ) map[uint64]Window {
+	// The window manager closes the content of every window it discards,
+	// but tabs outlive windows: release them first so they stay open in
+	// the bar instead of closed and bound to a window that is gone, which
+	// clicking them would then focus.
+	for _, bw := range c.windows {
+		if t, ok := browserTabAtWindow(bw); ok {
+			c.updateWindowContent(bw, c.wallpaper(), t)
+		}
+		bw.parent = nil
+	}
 	c.windows = make(map[uint64]*browserWindow)
 	c.prompts = make(map[string]Window)
 	windows := c.wm.RestoreTileLayout(layout, func(windowID uint64) tui.Handler {
