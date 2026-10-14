@@ -243,7 +243,10 @@ func (t *parserHandler) resizeLocked(width, height int) {
 		return
 	}
 	anchors := t.graphicsAnchored()
-	t.sync.primBuf.Resize(width, height)
+	wrapPending := t.sync.primBuf.Reflow(width, height, t.shouldWrap && !t.useAlt)
+	if !t.useAlt {
+		t.shouldWrap = wrapPending
+	}
 	t.sync.altBuf.Resize(width, height)
 	t.width = width
 	t.height = height

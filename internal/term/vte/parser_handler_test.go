@@ -404,9 +404,8 @@ func TestIntegrationParserHandler(t *testing.T) {
 				assert.Equal(t, term.Coordinates{Y: 4, X: 4}, p.sync.buf.CursorAtScreen())
 
 				p.Resize(1, 1)
-				// content was wrapped, CursorAtScroll doesn't take that into consideration
-				assert.Equal(t, term.Coordinates{Y: 11, X: 4}, p.sync.buf.CursorAtScroll())
-				assert.Equal(t, term.Coordinates{Y: 0, X: 4}, p.sync.buf.CursorAtScreen())
+				assert.Equal(t, term.Coordinates{Y: 15, X: 0}, p.sync.buf.CursorAtScroll())
+				assert.Equal(t, term.Coordinates{Y: 0, X: 0}, p.sync.buf.CursorAtScreen())
 
 				p.Resize(5, 5)
 				assert.Equal(t, term.Coordinates{Y: 7, X: 4}, p.sync.buf.CursorAtScroll())
@@ -1280,6 +1279,75 @@ func TestResizeShrinkKeepsRowsWithinWidth(t *testing.T) {
 		assertEqualBuf(t, p, "abcde \n      \n      ")
 		scroll := newViewScroll(p, 6, 3)
 		assert.Equal(t, 0, scroll.MaxOffset().X)
+	})
+}
+
+func TestResizeKeepsCursorAfterItsCharacter(t *testing.T) {
+	suite := []struct {
+		name                string
+		width, height       int
+		input               string
+		newWidth, newHeight int
+		expected            string
+	}{
+		{
+			name:  "widening joins the cursor row",
+			width: 10, height: 3,
+			input:    "abcdefghijklm",
+			newWidth: 20, newHeight: 3,
+			expected: "abcdefghijklm_      \n                    \n                    ",
+		},
+		{
+			name:  "narrowing splits the cursor row",
+			width: 20, height: 3,
+			input:    "abcdefghijklm",
+			newWidth: 10, newHeight: 3,
+			expected: "abcdefghij\nklm_      \n          ",
+		},
+		{
+			name:  "prompt drawn before the first resize",
+			width: 1, height: 1,
+			input:    "sh ",
+			newWidth: 16, newHeight: 3,
+			expected: "sh _            \n                \n                ",
+		},
+		{
+			name:  "wrap pending at the new width",
+			width: 30, height: 3,
+			input:    "abcdefghijklmnopqrst",
+			newWidth: 10, newHeight: 3,
+			expected: "abcdefghij\nklmnopqrst\n_         ",
+		},
+		{
+			name:  "wrap pending at both widths",
+			width: 10, height: 3,
+			input:    "abcdefghij",
+			newWidth: 5, newHeight: 3,
+			expected: "abcde\nfghij\n_    ",
+		},
+	}
+
+	for _, test := range suite {
+		t.Run(test.name, func(t *testing.T) {
+			p := newInputParserHandler(t, false)
+			p.Resize(test.width, test.height)
+			writeToBuffer(p, test.input)
+			p.Resize(test.newWidth, test.newHeight)
+			p.Input('_')
+			assertEqualBuf(t, p, test.expected)
+		})
+	}
+
+	t.Run("saved cursor", func(t *testing.T) {
+		p := newInputParserHandler(t, false)
+		p.Resize(10, 3)
+		writeToBuffer(p, "abcdefghijklm")
+		p.SaveCursorPosition()
+		writeToBuffer(p, "\nx")
+		p.Resize(20, 3)
+		p.RestoreCursorPosition()
+		p.Input('_')
+		assertEqualBuf(t, p, "abcdefghijklm_      \nx                   \n                    ")
 	})
 }
 

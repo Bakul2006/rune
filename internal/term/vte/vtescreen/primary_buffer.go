@@ -135,19 +135,66 @@ func isWrapped(row []term.Cell) bool {
 	return len(row) > 0 && row[len(row)-1].Bytes == cell.WrapMarker
 }
 
-// Resize resizes this Buffer and resets the vertical margins.
-func (b *PrimaryBuffer) Resize(width, height int) {
-	cursor := b.CursorAtScroll()
-	savedCursor := b.scroll.WindowToScrollCoordinates(b.savedCursor.position)
+// logicalColumn locates scroll position pos as a logical line and the
+// cell offset within it, which a reflow preserves.
+func (b *PrimaryBuffer) logicalColumn(pos term.Coordinates) (line, col int) {
+	line, offset := b.LogicalRow(pos.Y)
+	rows := b.Cells.RawCells()
+	col = pos.X
+	for y := max(0, pos.Y-offset); y < min(pos.Y, len(rows)); y++ {
+		col += len(rows[y])
+	}
+	return line, col
+}
 
+// windowPosition is the inverse of logicalColumn, in window
+// coordinates. A column past the last one of the screen is reported on
+// the last one, with wrapPending set.
+func (b *PrimaryBuffer) windowPosition(line, col int) (pos term.Coordinates, wrapPending bool) {
+	rows := b.Cells.RawCells()
+	y := b.RowForLogical(line, 0)
+	for y >= 0 && y < len(rows)-1 && isWrapped(rows[y]) && col >= len(rows[y]) {
+		col -= len(rows[y])
+		y++
+	}
+	pos, _ = b.scroll.ScrollToWindowCoordinates(term.Coordinates{X: col, Y: y})
+	if b.width > 0 && pos.X >= b.width {
+		pos.X = b.width - 1
+		wrapPending = true
+	}
+	return pos, wrapPending
+}
+
+// Resize is Reflow for a cursor that is not waiting to wrap.
+func (b *PrimaryBuffer) Resize(width, height int) {
+	b.Reflow(width, height, false)
+}
+
+// Reflow resizes this buffer and resets the vertical margins, rewrapping
+// the rows joined by wrap markers to the new width. The cursor and the
+// saved cursor stay with the character they were on. wrapPending is
+// whether the cursor waits to wrap after writing the last column, so it
+// stands for the column past that cell. The result is that state at the
+// new width: a cursor that lands past the last column waits on it.
+func (b *PrimaryBuffer) Reflow(width, height int, wrapPending bool) bool {
 	origWidth := width
 	width = max(b.minWidth, width)
 
+	cursorLine, cursorCol := b.logicalColumn(b.CursorAtScroll())
+	// The blanks the cursor moved past are text it follows, so the
+	// reflow keeps its line up to the cursor's cell.
+	keep := cursorCol + 1
+	if wrapPending && width != 0 {
+		cursorCol++
+	}
+	savedLine, savedCol := b.logicalColumn(
+		b.scroll.WindowToScrollCoordinates(b.savedCursor.position))
+
 	var wraps int
 	if width != 0 && width > b.width {
-		wraps = b.growColumns(width, height)
+		wraps = b.growColumns(width, keep)
 	} else if width != 0 && width < b.width {
-		wraps = b.shrinkColumns(width)
+		wraps = b.shrinkColumns(width, keep)
 	}
 	if height != 0 && (height > b.height || wraps < b.wraps) {
 		b.growLines(width, height)
@@ -162,10 +209,14 @@ func (b *PrimaryBuffer) Resize(width, height int) {
 	b.scroll.Resize(origWidth, height)
 	b.Cells.ResetCapacity(width)
 
-	cursor.Y = max(0, cursor.Y+wraps)
-	b.cursor.position, _ = b.scroll.ScrollToWindowCoordinates(cursor)
-	savedCursor.Y = max(0, b.savedCursor.position.Y+wraps)
-	b.savedCursor.position = savedCursor
+	var pastEnd bool
+	b.cursor.position, pastEnd = b.windowPosition(cursorLine, cursorCol)
+	b.savedCursor.position, _ = b.windowPosition(savedLine, savedCol)
+	if width == 0 {
+		// Without columns the cursor has nowhere to wrap to yet.
+		return wrapPending
+	}
+	return pastEnd
 }
 
 func (b *PrimaryBuffer) growLines(width, height int) {
@@ -202,14 +253,14 @@ func (b *PrimaryBuffer) shrinkLines(height int) {
 	}
 }
 
-func (b *PrimaryBuffer) growColumns(width, _ int) (wraps int) {
+func (b *PrimaryBuffer) growColumns(width, keep int) (wraps int) {
 	if width == 0 {
 		return
 	}
 	pos := b.CursorAtScroll()
 	for y := max(0, b.Cells.Rows()-1); y >= 0; y-- {
 		if y == pos.Y {
-			wraps = b.wrapTopLines(y, width)
+			wraps = b.wrapTopLines(y, width, keep)
 			break
 		}
 		b.Cells.ExtendRowToWidth(y, width)
@@ -218,12 +269,12 @@ func (b *PrimaryBuffer) growColumns(width, _ int) (wraps int) {
 	return
 }
 
-func (b *PrimaryBuffer) shrinkColumns(width int) (wraps int) {
+func (b *PrimaryBuffer) shrinkColumns(width, keep int) (wraps int) {
 	pos := b.CursorAtScroll()
 	var y int
 	for y = max(0, b.Cells.Rows()-1); y >= 0; y-- {
 		if y == pos.Y {
-			wraps = b.wrapTopLines(y, width)
+			wraps = b.wrapTopLines(y, width, keep)
 			break
 		}
 		if cols := b.Cells.Columns(y); cols > width {
@@ -245,7 +296,9 @@ func (b *PrimaryBuffer) shrinkColumns(width int) (wraps int) {
 	return
 }
 
-func (b *PrimaryBuffer) wrapTopLines(at, width int) (n int) {
+// wrapTopLines rewraps the logical lines up to the one at row at, the
+// cursor's, keeping at least its first keep cells.
+func (b *PrimaryBuffer) wrapTopLines(at, width, keep int) (n int) {
 	if width == 0 {
 		return
 	}
@@ -287,6 +340,9 @@ func (b *PrimaryBuffer) wrapTopLines(at, width int) (n int) {
 			if cell.Ch != b.defaultChar && cell.Ch != ' ' {
 				break
 			}
+		}
+		if y == at {
+			x = min(max(x, keep-1), len(row)-1)
 		}
 		cols := len(row)
 		switch {
