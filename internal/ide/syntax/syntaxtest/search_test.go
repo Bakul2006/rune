@@ -85,6 +85,34 @@ func TestParserHighlights(t *testing.T) {
 	assert.Equal(t, expected, locations)
 }
 
+func TestParserHighlightsUseConfiguredCaptureNamesAttributes(t *testing.T) {
+	wuri, err := workspaceapi.ParseURI("memory:///")
+	require.NoError(t, err)
+	uri, err := workspaceapi.ParseURI("memory:///file.go")
+	require.NoError(t, err)
+
+	keyword := term.Attributes{Fg: term.ColorGreen, Attrs: term.AttrBold}
+	function := term.Attributes{Fg: term.ColorAqua}
+	parser := treesitter.NewParser(nil, newInstalledPkgManager(t), wuri).
+		WithCaptureNamesAttributes(map[string]term.Attributes{
+			"keyword":  keyword,
+			"function": function,
+		})
+
+	it, err := parser.Highlight(uri, "package main\nfunc main() {}")
+	require.NoError(t, err)
+	locations, err := iterator.ToSlice(context.Background(), it)
+	require.NoError(t, err)
+
+	attrs := make(map[term.Coordinates][]term.Attributes)
+	for _, l := range locations {
+		attrs[l.From] = append(attrs[l.From], l.Attr)
+	}
+	assert.Equal(t, []term.Attributes{keyword}, attrs[term.Coordinates{X: 0, Y: 0}], "package")
+	assert.Equal(t, []term.Attributes{keyword}, attrs[term.Coordinates{X: 0, Y: 1}], "func")
+	assert.Contains(t, attrs[term.Coordinates{X: 5, Y: 1}], function, "main")
+}
+
 func TestSearch(t *testing.T) {
 	t.Run("returns functions", func(t *testing.T) {
 		searcher, uri1, uri2, uri3 := setupSearcherForTests(t,

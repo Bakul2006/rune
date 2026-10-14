@@ -739,7 +739,8 @@ func (h *workspaceManagerHandler) init(
 
 	// don't install a fs watcher for the home workspace,
 	// to prevent unecessary resource consumption
-	homeParser := treesitter.NewParser(h.homeWorkspace, h.pkgmanager, h.homeURI)
+	homeParser := treesitter.NewParser(h.homeWorkspace, h.pkgmanager, h.homeURI).
+		WithCaptureNamesAttributes(cfg.syntaxConfig().CaptureNamesAttributes)
 	globalOpts := h.textOpts(cfg, homeParser, h.homeURI, h.homeWorkspace)
 	tm := new(workspaceTabManager)
 	tm.parent = h
@@ -1894,7 +1895,8 @@ func (h *workspaceManagerHandler) buildWorkspaceAsync(
 		}
 	}
 
-	parser := treesitter.NewParser(cwd, h.pkgmanager, uri)
+	parser := treesitter.NewParser(cwd, h.pkgmanager, uri).
+		WithCaptureNamesAttributes(cfg.syntaxConfig().CaptureNamesAttributes)
 	var wsParser syntaxapi.Parser = parser
 	var symbolDB *symboldb.Parser
 	var symbolDBCloser io.Closer

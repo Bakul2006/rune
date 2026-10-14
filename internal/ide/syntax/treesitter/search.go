@@ -37,6 +37,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/textapi"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/iterator"
+	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/cell"
 	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/idelsp/languages"
@@ -75,6 +76,24 @@ type Parser struct {
 	// hidden directories) from the workspace source-code walks. It is built
 	// once per parser and shared with specCache.
 	filter *queryFilter
+	// highlights overrides the built-in highlight attributes, as
+	// syntax.Config.CaptureNamesAttributes does for editor buffers. It is
+	// held by pointer because a map field would make Parser uncomparable,
+	// and comparing syntaxapi.Parser values holding one would panic.
+	highlights *highlightAttributes
+}
+
+type highlightAttributes struct {
+	byCaptureName map[string]term.Attributes
+}
+
+// WithCaptureNamesAttributes returns a copy of p whose Highlight resolves
+// capture names against attrs before the built-in defaults, so content
+// highlighted on behalf of extensions matches the editor's colors. The
+// copy shares p's caches. attrs must not be modified afterwards.
+func (p Parser) WithCaptureNamesAttributes(attrs map[string]term.Attributes) Parser {
+	p.highlights = &highlightAttributes{byCaptureName: attrs}
+	return p
 }
 
 // queryFilter lazily builds and caches the walkdir.Filter applied to the
@@ -284,7 +303,11 @@ func (p Parser) Highlight(file workspaceapi.URI, content string) (
 		}
 		defer tree.Close()
 
-		locations := getHighlights(counts, data, tree, parser.query, nil)
+		var attrs map[string]term.Attributes
+		if p.highlights != nil {
+			attrs = p.highlights.byCaptureName
+		}
+		locations := getHighlights(counts, data, tree, parser.query, attrs)
 		for _, location := range locations {
 			select {
 			case results <- location:

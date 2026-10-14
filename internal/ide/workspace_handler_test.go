@@ -10353,6 +10353,56 @@ func TestCommandBindingOptsEditorKeyBindings(t *testing.T) {
 	}
 }
 
+func TestWorkspaceParserHighlightsWithConfiguredHighlights(t *testing.T) {
+	rawDir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(rawDir)
+	require.NoError(t, err)
+
+	dataDir := t.TempDir()
+	stageTreeSitterGo(t, dataDir)
+	configPath := filepath.Join(dataDir, "rune.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte(`
+clipboard: memory
+editor:
+  highlights:
+    keyword:
+      fg: lime
+`), 0o666))
+
+	mu := new(sync.Mutex)
+	scheduleNextTick, drainSchedule := newTestScheduler(t, mu)
+	i, err := New(dir, configPath, dataDir, pkgtrust.NewStore(dataDir, nil), newTestStorage(t, dataDir),
+		WithLocker(mu),
+		WithScheduleNextTick(scheduleNextTick),
+		WithPublishEvent(func(term.Event) bool { return true }),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = i.Close() })
+
+	root := i.Ready()
+	mu.Lock()
+	root.Resize(80, 24)
+	mu.Unlock()
+	drainSchedule()
+	i.WaitWorkspaces()
+
+	mu.Lock()
+	wh := i.workspaceHandler.workspaces[i.workspaceHandler.focus]
+	mu.Unlock()
+	require.NotNil(t, wh)
+
+	uri, err := workspaceapi.ParseURI("file://" + filepath.Join(dir, "main.go"))
+	require.NoError(t, err)
+	// The workspace parser is the one extensions highlight with.
+	it, err := wh.parser.Highlight(uri, "package main")
+	require.NoError(t, err)
+	locations, err := iterator.ToSlice(context.Background(), it)
+	require.NoError(t, err)
+	require.NotEmpty(t, locations)
+	assert.Equal(t, term.Coordinates{}, locations[0].From)
+	assert.Equal(t, term.Attributes{Fg: term.ColorLime}, locations[0].Attr)
+}
+
 func workingStatus() programstatus.Report {
 	return programstatus.Report{State: programstatus.Working, Progress: -1}
 }

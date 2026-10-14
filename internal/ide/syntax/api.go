@@ -22,6 +22,7 @@ package syntax
 
 import (
 	"context"
+	"maps"
 	"os"
 	"strings"
 
@@ -127,10 +128,11 @@ func FuncLocationSetter(fn func(textapi.LocationList)) LocationSetter {
 	return fnLocationList{fn: fn}
 }
 
-// DefaultConfig returns a sane configuration for a tree parser.
+// DefaultConfig returns a sane configuration for a tree parser. Its
+// CaptureNamesAttributes is the caller's own copy of the defaults.
 func DefaultConfig() Config {
 	return Config{
-		CaptureNamesAttributes: defaultCaptureNamesAttributes,
+		CaptureNamesAttributes: maps.Clone(defaultCaptureNamesAttributes),
 		ScheduleNextTick:       func(cb func()) bool { cb(); return true },
 		ReparseOnErrors:        true,
 		StrictErrors:           false,
@@ -174,6 +176,9 @@ var defaultCaptureNamesAttributes = map[string]term.Attributes{
 	"number":           {Fg: term.ColorRed},
 	"constant.builtin": {},
 	"comment":          {Fg: term.ColorBlue},
+
+	"diff.plus":  {Fg: term.ColorGreen},
+	"diff.minus": {Fg: term.ColorRed},
 
 	// Markup captures are emitted by common tree-sitter queries for markdown,
 	// markdown_inline, djot, rst, latex, typst, vimdoc, gitcommit, pod, and
