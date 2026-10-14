@@ -610,7 +610,7 @@ func runTUI(
 		}),
 		ide.WithShellRCDir(shellRCDir),
 		ide.WithHostDataDir(*flagDataPath),
-		ide.WithScheme(docsScheme, newDocsSchemeFunc(*flagConfigPath)),
+		ide.WithScheme(workspace.DocsScheme, newDocsSchemeFunc(*flagConfigPath)),
 		ide.WithStreamingOpen(true),
 		ide.WithClipboard(text.NewAsyncSystemClipboard()),
 		ide.WithSystemURLOpener(func(u *url.URL) error { return extbrowser.Browse(u) }),

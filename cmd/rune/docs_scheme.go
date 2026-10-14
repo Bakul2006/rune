@@ -32,8 +32,6 @@ import (
 	"unstable.build/rune/internal/workspace"
 )
 
-const docsScheme = "docs"
-
 // Only markdown is embedded: the docs tree also carries gifs and
 // other site assets that the in-memory workspace never serves, so baking
 // them into the binary would only bloat it. Patterns are listed per
@@ -100,7 +98,7 @@ func renderDocsAgentsMD(configPath string) ([]byte, error) {
 // scheme so the agent can apply_patch the user's config from inside
 // docs:///.
 func newDocsSchemeFunc(configPath string) schemeapi.SchemeFunc {
-	inner := workspace.NewInMemorySchemeFunc(docsScheme)
+	inner := workspace.NewInMemorySchemeFunc(workspace.DocsScheme)
 	agentsMD, err := renderDocsAgentsMD(configPath)
 	return func(
 		ctx context.Context, cfg config.Config, uri workspaceapi.URI,

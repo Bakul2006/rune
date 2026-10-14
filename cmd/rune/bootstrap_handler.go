@@ -53,6 +53,7 @@ import (
 	"unstable.build/rune/internal/term/gui/appmenu"
 	"unstable.build/rune/internal/term/gui/glassbar"
 	"unstable.build/rune/internal/term/gui/openpanel"
+	"unstable.build/rune/internal/workspace"
 )
 
 type bootstrapPrompter interface {
@@ -245,7 +246,7 @@ func (b *bootstrapHandler) buildConfiguredIDE(
 		ide.WithCellPixelSize(b.cellPixelSize),
 		ide.WithShellRCDir(b.shellRCDir),
 		ide.WithHostDataDir(b.dataDir),
-		ide.WithScheme(docsScheme, newDocsSchemeFunc(b.configPath)),
+		ide.WithScheme(workspace.DocsScheme, newDocsSchemeFunc(b.configPath)),
 		ide.WithTabsClickCallback(b.handleTabsClick),
 		ide.WithPackageConfigMergeHook(b.packageConfigMergeHook),
 		ide.WithDispatchOnPreview(cmdSetTheme,

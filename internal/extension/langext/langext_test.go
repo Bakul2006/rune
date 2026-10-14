@@ -40,6 +40,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/iterator"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/extension/langext/langexttest"
+	"unstable.build/rune/internal/workspace"
 	"unstable.build/rune/internal/workspace/walkdir"
 )
 
@@ -708,6 +709,44 @@ func TestInitializerNoMarkerDoesNotInitialize(t *testing.T) {
 	assert.Equal(t, int32(0), calls.Load())
 }
 
+func TestInitializerSkipsInMemoryWorkspace(t *testing.T) {
+	cases := []struct {
+		scheme   string
+		wantInit bool
+	}{
+		{scheme: workspace.FileScheme, wantInit: true},
+		{scheme: workspace.MemoryScheme},
+		{scheme: workspace.DocsScheme},
+	}
+	for _, tc := range cases {
+		t.Run(tc.scheme, func(t *testing.T) {
+			const ws = "/ws"
+			mfs := newMemFS(ws)
+			mfs.scheme = tc.scheme
+			mfs.addFile("/ws/pyproject.toml")
+
+			var calls atomic.Int32
+			cfg := pyConfig(func(context.Context, Root) error {
+				calls.Add(1)
+				return nil
+			})
+
+			ed := &fakeEditor{}
+			i := NewInitializer(context.Background(), mfs, ed, &langexttest.Installer{}, cfg)
+			require.NoError(t, i.Start())
+			require.NoError(t, i.InitializeAt(context.Background(), rootForDir(mfs, ws, ws)))
+
+			if tc.wantInit {
+				assert.NotEmpty(t, ed.subscribedTo)
+				assert.Equal(t, int32(1), calls.Load())
+			} else {
+				assert.Empty(t, ed.subscribedTo)
+				assert.Equal(t, int32(0), calls.Load())
+			}
+		})
+	}
+}
+
 func TestInitializeAtDedupedAgainstLaterEvents(t *testing.T) {
 	const ws = "/ws"
 	mfs := newMemFS(ws)
@@ -942,9 +981,10 @@ func (e *fakeEditor) SetDefaultAttributes(textapi.Handler, term.Attributes) erro
 
 // memFS is an in-memory workspaceapi.FileSystem with real path-join
 // semantics so the upward marker walk can be exercised without touching
-// disk.
+// disk. Its URIs carry scheme, file:// when unset.
 type memFS struct {
 	root     string
+	scheme   string
 	files    map[string]bool
 	dirs     map[string]bool
 	stats    atomic.Int32
@@ -966,7 +1006,11 @@ func (m *memFS) resolve(p string) string {
 }
 
 func (m *memFS) URI(p string) (workspaceapi.URI, error) {
-	return workspaceapi.ParseURI("file://" + m.resolve(p))
+	scheme := m.scheme
+	if scheme == "" {
+		scheme = workspace.FileScheme
+	}
+	return workspaceapi.ParseURI(scheme + "://" + m.resolve(p))
 }
 
 func (m *memFS) Stat(p string) (os.FileInfo, error) {
