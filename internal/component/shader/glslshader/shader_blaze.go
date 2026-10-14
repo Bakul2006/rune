@@ -44,6 +44,7 @@ func Blaze(params BlazeParams, fps float) shader.Shader {
 		randDotV:    vec2(12.9898, 12.1414),
 		randG:       83758.5453,
 		noiseD:      vec2(0.0, 1.0),
+		hue:         colorHue(params.Color),
 	}
 }
 
@@ -51,6 +52,11 @@ func Blaze(params BlazeParams, fps float) shader.Shader {
 type BlazeParams struct {
 	Speed       vec2D
 	SwapRedBlue bool
+	// Color, unless term.ColorDefault, turns the fire's hue so its red
+	// burns in the hue of Color, keeping the flames' light and shade.
+	// Only the hue counts, so a grey leaves the fire red. It applies
+	// before SwapRedBlue.
+	Color term.Color
 	// PaintForeground colours the characters rather than the cell
 	// background, so the fire is only visible through existing text.
 	// Blank cells and glyphs that render as background, such as fade
@@ -81,6 +87,8 @@ type blaze struct {
 	randDotV vec2D
 	randG    float
 	noiseD   vec2D
+	// hue is how far, as a fraction of a turn, Color turns the fire.
+	hue float
 }
 
 func (s *blaze) runCell(
@@ -131,6 +139,9 @@ func (s *blaze) runCell(
 	hsv.y *= hsv.z * 1.1
 	hsv.z *= hsv.y * 1.13
 	hsv.y = (2.2 - hsv.z*.9) * 1.20
+	if s.hue != 0 {
+		hsv.x = fract(hsv.x + s.hue)
+	}
 	color = s.hsv2rgb(hsv)
 	color = clamp3D(color, vec3FromScalar(0.0), vec3FromScalar(1.0))
 

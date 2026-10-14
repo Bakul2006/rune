@@ -1526,7 +1526,8 @@ func (h *workspaceManagerHandler) textOpts(
 		text.WithActiveTabShader(
 			cfg.animationsActiveTabShader(animActiveContentTab),
 			cfg.animationsActiveTabFPS(animActiveContentTab),
-			cfg.animationsActiveTabLoop(animActiveContentTab)),
+			cfg.animationsActiveTabLoop(animActiveContentTab),
+			cfg.animationsActiveTabParams(animActiveContentTab)),
 		text.WithOnTabStatus(func(
 			tab workspaceapi.URI, _, status programstatus.Summary,
 		) {
@@ -3357,6 +3358,7 @@ func (h *workspaceManagerHandler) initTabs(
 		Shader:      cfg.animationsActiveTabShader(animActiveWorkspaceTab),
 		FPS:         cfg.animationsActiveTabFPS(animActiveWorkspaceTab),
 		Loop:        cfg.animationsActiveTabLoop(animActiveWorkspaceTab),
+		Params:      cfg.animationsActiveTabParams(animActiveWorkspaceTab),
 		DefAttr:     cfg.nonFocusTabAttr(),
 		Interrupter: h.events.globalInterrupter(),
 		Active:      h.activeWorkspaceBarIndices,
@@ -3451,7 +3453,8 @@ func (h *workspaceManagerHandler) decorateWorkspaceBar() {
 			continue
 		}
 		sum, _ := h.workspaceStatus(slot)
-		nameAttr, iconAttr := h.status.cfg.BarAttrs(sum)
+		style := h.status.cfg.WorkspaceTab
+		nameAttr, iconAttr := style.BarAttrs(sum)
 		if nameAttr == (term.Attributes{}) {
 			nameAttr = w.bellAttr
 		}
@@ -3469,8 +3472,8 @@ func (h *workspaceManagerHandler) decorateWorkspaceBar() {
 		} else {
 			h.bar.ResetIconAttr(idx)
 		}
-		if h.status.cfg.Progress && sum.State == programstatus.Working && sum.Progress >= 0 {
-			h.bar.SetTabProgress(idx, sum.Progress, h.status.cfg.WorkingDoneAttr)
+		if style.Progress && sum.State == programstatus.Working && sum.Progress >= 0 {
+			h.bar.SetTabProgress(idx, sum.Progress, style.WorkingDoneAttr)
 		} else {
 			h.bar.ResetTabProgress(idx)
 		}

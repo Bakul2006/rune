@@ -314,6 +314,58 @@ For ready-to-copy `exo` configs (Vim, Neovim, Helix, Nano, and more), see the
   See the [Examples](./learn/exoeditor.md#examples) in the Exoeditor guide for
   the recommended `command.key` per editor.
 
+## Tab animations
+
+`animations.active_content_tab` plays over content tabs whose program reports
+it is [working](./develop/runectl.md#program-status), and
+`animations.active_workspace_tab` over the workspace tabs that own one. Both
+take the same keys:
+
+- `enabled`: set to `false` to turn the effect off.
+- `shader`: one of `blaze`, `burn`, `inferno`, `noise`, `pulse`, `shine` or
+  `trippy`.
+- `fps`: how many times per second the effect redraws.
+- `loop`: how long one loop of `burn`, `pulse` or `shine` lasts, such as
+  `"2400ms"`. The other shaders move at their own pace.
+
+Settings that only apply to one shader go under a key named after it, and are
+only used while that shader is selected. All of them are optional:
+
+| Shader | Setting | Effect |
+| --- | --- | --- |
+| `pulse`, `shine` | `color` | The colour the label is blended toward. Defaults to white. |
+| `pulse`, `shine` | `intensity` | 0 to 1: how far the label is blended at the peak, where 1 reaches `color`. Subtle by default, so the label keeps its status colour. |
+| `shine` | `band_width` | 0 to 1: how much of the label the band covers. Narrower reads as a glint, wider as a wash. |
+| `shine` | `direction` | The way the band sweeps: `bottom_left_to_top_right` (default), `top_left_to_bottom_right`, `left_to_right`, `right_to_left`, `top_to_bottom` or `bottom_to_top`. |
+| `blaze`, `inferno` | `color` | Turns the flames' red to this colour's hue, keeping their shading. Defaults to red; a grey also keeps them red. |
+| `blaze`, `inferno` | `swap_red_blue` | Blue flames rather than red, which do not read as an error. Applied after `color`. |
+| `burn` | `gradient` | The list of colours a character goes through as it burns. |
+| `burn` | `duration` | 0 to 1: the part of a loop each character burns for. Shorter makes a narrower wave. |
+| `burn` | `seed` | Picks another burn order. |
+| `burn` | `origin` | 0 to 1: where across the label the wave starts, 0 being its left edge. `None` (the default) starts it at a random character. |
+| `noise`, `trippy` | `speed` | How fast the effect moves, where 1 is its usual pace. |
+| `noise` | `amplitude` | The contrast of the noise. |
+| `noise` | `scale` | How fine the noise is. Larger packs in more detail. |
+| `blaze`, `burn`, `inferno`, `noise`, `trippy` | `animate_background` | `true` animates the cell background rather than only colouring the text: blaze and inferno set it on fire, noise fills it and scatters glyphs over the label, trippy fills it and hides the text, and burn burns the label glyph by glyph. |
+
+```yaml tab
+animations:
+  active_workspace_tab:
+    shader: shine
+    shine:
+      color: green
+      intensity: 0.8
+      band_width: 0.4
+```
+
+```python tab
+config["animations"]["active_workspace_tab"]["shine"] = {
+    "color":      "green",
+    "intensity":  0.8,
+    "band_width": 0.4,
+}
+```
+
 ## GUI
 
 - `gui.default_theme` / `gui.themes`: the active color theme and the catalog

@@ -590,7 +590,7 @@ func (in statusInbox) glyph(state programstatus.State, kind programstatus.Kind) 
 // rowAttr returns the attributes a row in state is drawn with: the
 // state's name attributes, or its icon attributes when it has none.
 func (in statusInbox) rowAttr(state programstatus.State) term.Attributes {
-	name, icon := in.cfg.BarAttrs(programstatus.Summary{State: state})
+	name, icon := in.cfg.ContentTab.BarAttrs(programstatus.Summary{State: state})
 	if name == (term.Attributes{}) {
 		return icon
 	}

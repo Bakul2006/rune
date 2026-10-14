@@ -1705,7 +1705,7 @@ func TestSetTabStatusDecorations(t *testing.T) {
 	for _, tc := range suite {
 		t.Run(tc.desc, func(t *testing.T) {
 			b, tabs, draw := newStatusComponent(t)
-			b.config.TabStatus.Progress = true
+			b.config.TabStatus.ContentTab.Progress = true
 			a := tabs[0]
 			if tc.bell {
 				require.True(t, b.SetTabDefaultNameAndAttrs(a.uri, "abcdefghij", bell))

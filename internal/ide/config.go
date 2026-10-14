@@ -52,6 +52,7 @@ import (
 	tcomponent "unstable.build/rune/internal/component"
 	"unstable.build/rune/internal/component/asciiart"
 	"unstable.build/rune/internal/component/notifications"
+	"unstable.build/rune/internal/component/shader/glslshader"
 	"unstable.build/rune/internal/component/shader/shaderloop"
 	tconfig "unstable.build/rune/internal/config"
 	"unstable.build/rune/internal/handler"
@@ -1498,6 +1499,203 @@ func (c ideConfig) animationsActiveTabLoop(key string) time.Duration {
 		return shaderloop.DefaultLoop
 	}
 	return loop
+}
+
+// animationsActiveTabParams returns the tuning of each effect under
+// animations.<key>.<shader>, whichever shader is selected, so switching
+// shaders picks up its own. Absent, None or invalid settings are left
+// zero, keeping the effect's own; None lets the config spell out a knob
+// whose default has no value, such as burn's random origin.
+func (c ideConfig) animationsActiveTabParams(key string) shaderloop.Params {
+	var ret shaderloop.Params
+	d, ok := c.animationsDict(key)
+	if !ok {
+		return ret
+	}
+	tuning := func(shader string) (shaderTuning, bool) {
+		path := "animations." + key + "." + shader
+		m, err := config.MapConfig(d).GetMap(shader)
+		if err != nil {
+			if err != config.ErrNotFound {
+				c.errors[path] = err
+			}
+			return shaderTuning{}, false
+		}
+		m = maps.Clone(m)
+		maps.DeleteFunc(m, func(_ string, v any) bool { return v == nil })
+		return shaderTuning{errors: c.errors, cfg: config.MapConfig(m), prefix: path + "."}, true
+	}
+	fire := func(t shaderTuning) shaderloop.FireParams {
+		return shaderloop.FireParams{
+			AnimateBackground: t.bool("animate_background"),
+			Color:             t.color("color"),
+			SwapRedBlue:       t.bool("swap_red_blue"),
+		}
+	}
+	if t, ok := tuning("blaze"); ok {
+		ret.Blaze = fire(t)
+	}
+	if t, ok := tuning("burn"); ok {
+		origin, fixed := t.number("origin", "a value in [0, 1]", func(v float64) bool {
+			return v >= 0 && v <= 1
+		})
+		ret.Burn = shaderloop.BurnParams{
+			AnimateBackground: t.bool("animate_background"),
+			Gradient:          t.colors("gradient"),
+			Duration:          t.fraction("duration"),
+			Seed:              int64(t.int("seed")),
+			FixedOrigin:       fixed,
+			Origin:            origin,
+		}
+	}
+	if t, ok := tuning("inferno"); ok {
+		ret.Inferno = fire(t)
+	}
+	if t, ok := tuning("noise"); ok {
+		ret.Noise = shaderloop.NoiseParams{
+			AnimateBackground: t.bool("animate_background"),
+			Speed:             t.positive("speed"),
+			Amplitude:         t.positive("amplitude"),
+			Scale:             t.positive("scale"),
+		}
+	}
+	if t, ok := tuning("pulse"); ok {
+		ret.Pulse = shaderloop.PulseParams{
+			Color:     t.color("color"),
+			Intensity: t.fraction("intensity"),
+		}
+	}
+	if t, ok := tuning("shine"); ok {
+		ret.Shine = shaderloop.ShineParams{
+			Color:     t.color("color"),
+			Intensity: t.fraction("intensity"),
+			BandWidth: t.fraction("band_width"),
+			Direction: t.direction("direction"),
+		}
+	}
+	if t, ok := tuning("trippy"); ok {
+		ret.Trippy = shaderloop.TrippyParams{
+			AnimateBackground: t.bool("animate_background"),
+			Speed:             t.positive("speed"),
+		}
+	}
+	return ret
+}
+
+// shaderTuning reads the knobs of one effect. Each getter returns the
+// zero value, which keeps the effect's own tuning, when the knob is
+// absent or invalid, and records an invalid one under prefix+key.
+type shaderTuning struct {
+	errors map[string]error
+	cfg    config.Config
+	prefix string
+}
+
+// shineDirections names the ways the shine band can sweep.
+var shineDirections = map[string]glslshader.Direction{
+	"bottom_left_to_top_right": glslshader.DirectionBottomLeftToTopRight,
+	"top_left_to_bottom_right": glslshader.DirectionTopLeftToBottomRight,
+	"left_to_right":            glslshader.DirectionLeftToRight,
+	"right_to_left":            glslshader.DirectionRightToLeft,
+	"top_to_bottom":            glslshader.DirectionTopToBottom,
+	"bottom_to_top":            glslshader.DirectionBottomToTop,
+}
+
+func (t shaderTuning) fail(key string, err error) {
+	if err != config.ErrNotFound {
+		t.errors[t.prefix+key] = err
+	}
+}
+
+func (t shaderTuning) bool(key string) bool {
+	v, err := t.cfg.GetBool(key)
+	if err != nil {
+		t.fail(key, err)
+		return false
+	}
+	return v
+}
+
+func (t shaderTuning) int(key string) int {
+	v, err := t.cfg.GetInt(key)
+	if err != nil {
+		t.fail(key, err)
+		return 0
+	}
+	return v
+}
+
+func (t shaderTuning) color(key string) term.Color {
+	col, err := t.cfg.GetColor(key)
+	if err != nil {
+		t.fail(key, err)
+		return term.ColorDefault
+	}
+	return col
+}
+
+// colors reads a non-empty list of colours, each in any form a single
+// colour takes.
+func (t shaderTuning) colors(key string) []term.Color {
+	vs, err := t.cfg.GetSlice(key)
+	if err != nil {
+		t.fail(key, err)
+		return nil
+	}
+	if len(vs) == 0 {
+		t.fail(key, errors.New("expected at least one colour"))
+		return nil
+	}
+	ret := make([]term.Color, len(vs))
+	for i, v := range vs {
+		col, err := config.MapConfig(map[string]any{key: v}).GetColor(key)
+		if err != nil {
+			t.fail(key, fmt.Errorf("colour %d: %w", i, err))
+			return nil
+		}
+		ret[i] = col
+	}
+	return ret
+}
+
+// number reads a number that valid accepts, described by want, and
+// reports whether one was set.
+func (t shaderTuning) number(key, want string, valid func(float64) bool) (float64, bool) {
+	v, err := t.cfg.GetFloat(key)
+	if err != nil {
+		t.fail(key, err)
+		return 0, false
+	}
+	if !valid(v) {
+		t.fail(key, fmt.Errorf("expected %s, got %v", want, v))
+		return 0, false
+	}
+	return v, true
+}
+
+func (t shaderTuning) fraction(key string) float64 {
+	v, _ := t.number(key, "a value in (0, 1]", func(v float64) bool { return v > 0 && v <= 1 })
+	return v
+}
+
+func (t shaderTuning) positive(key string) float64 {
+	v, _ := t.number(key, "a positive value", func(v float64) bool { return v > 0 })
+	return v
+}
+
+func (t shaderTuning) direction(key string) glslshader.Direction {
+	s, err := t.cfg.GetString(key)
+	if err != nil {
+		t.fail(key, err)
+		return glslshader.DirectionBottomLeftToTopRight
+	}
+	d, ok := shineDirections[s]
+	if !ok {
+		t.fail(key, fmt.Errorf("unknown direction %q, expected one of %s",
+			s, strings.Join(slices.Sorted(maps.Keys(shineDirections)), ", ")))
+		return glslshader.DirectionBottomLeftToTopRight
+	}
+	return d
 }
 
 func (c ideConfig) prompt() (config.Config, bool) {
@@ -4465,11 +4663,6 @@ func (c ideConfig) tabStatusConfig() browser.TabStatusConfig {
 	if !ok {
 		return ret
 	}
-	if progress, err := cfg.GetBool("progress"); err == nil {
-		ret.Progress = progress
-	} else if err != config.ErrNotFound {
-		c.errors["terminal.status.progress"] = err
-	}
 	if spinner, err := cfg.GetString("spinner"); err == nil {
 		ret.Spinner = []rune(spinner)
 	} else if err != config.ErrNotFound {
@@ -4512,6 +4705,27 @@ func (c ideConfig) tabStatusConfig() browser.TabStatusConfig {
 			*f.dst = r
 		}
 	}
+	ret.ContentTab = c.tabStatusStyle(cfg, "content_tab", ret.ContentTab)
+	ret.WorkspaceTab = c.tabStatusStyle(cfg, "workspace_tab", ret.WorkspaceTab)
+	return ret
+}
+
+// tabStatusStyle reads terminal.status.<key>, keeping def for every
+// setting it leaves out.
+func (c ideConfig) tabStatusStyle(
+	status config.Config, key string, def browser.TabStatusStyle,
+) browser.TabStatusStyle {
+	ret := def
+	cfg, ok := c.getConfig(status, key)
+	if !ok {
+		return ret
+	}
+	prefix := "terminal.status." + key + "."
+	if progress, err := cfg.GetBool("progress"); err == nil {
+		ret.Progress = progress
+	} else if err != config.ErrNotFound {
+		c.errors[prefix+"progress"] = err
+	}
 	attrs := []struct {
 		key string
 		dst *term.Attributes
@@ -4527,7 +4741,14 @@ func (c ideConfig) tabStatusConfig() browser.TabStatusConfig {
 		{"error_icon_attr", &ret.ErrorIconAttr},
 	}
 	for _, a := range attrs {
-		*a.dst = c.terminalStatusAttr(cfg, a.key, *a.dst)
+		attr, err := config.GetAttributes(cfg, a.key)
+		if err != nil {
+			if err != config.ErrNotFound {
+				c.errors[prefix+a.key] = err
+			}
+			continue
+		}
+		*a.dst = attr
 	}
 	return ret
 }
@@ -4538,19 +4759,6 @@ func (c ideConfig) terminalStatus() (config.Config, bool) {
 		return nil, false
 	}
 	return c.getConfig(cfg, "status")
-}
-
-func (c ideConfig) terminalStatusAttr(
-	cfg config.Config, key string, def term.Attributes,
-) term.Attributes {
-	attr, err := config.GetAttributes(cfg, key)
-	if err != nil {
-		if err != config.ErrNotFound {
-			c.errors["terminal.status."+key] = err
-		}
-		return def
-	}
-	return attr
 }
 
 // tabStatusEnabled reads terminal.status.enabled; a disabled status

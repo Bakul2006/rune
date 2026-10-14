@@ -197,6 +197,7 @@ func (c *Component) Init(config Config) {
 		Shader:      config.ActiveTabShader,
 		FPS:         config.ActiveTabShaderFPS,
 		Loop:        config.ActiveTabShaderLoop,
+		Params:      config.ActiveTabShaderParams,
 		DefAttr:     config.NonFocusTabAttr,
 		Interrupter: c.interrupter,
 		Active:      c.activeTabIndices,
@@ -535,8 +536,8 @@ func (c *Component) applyTabDecorations(idx int, t *Tab) {
 	var icon rune
 	switch t.status.State {
 	case programstatus.Working:
-		if cfg.Progress && t.status.Progress >= 0 {
-			c.tabs.SetTabProgress(idx, t.status.Progress, cfg.WorkingDoneAttr)
+		if cfg.ContentTab.Progress && t.status.Progress >= 0 {
+			c.tabs.SetTabProgress(idx, t.status.Progress, cfg.ContentTab.WorkingDoneAttr)
 		} else {
 			c.tabs.ResetTabProgress(idx)
 		}
@@ -565,12 +566,12 @@ func (c *Component) applyTabDecorations(idx int, t *Tab) {
 }
 
 func (c *Component) statusNameAttr(status programstatus.Summary) term.Attributes {
-	name, _ := c.config.TabStatus.BarAttrs(status)
+	name, _ := c.config.TabStatus.ContentTab.BarAttrs(status)
 	return name
 }
 
 func (c *Component) statusIconAttr(status programstatus.Summary) term.Attributes {
-	_, icon := c.config.TabStatus.BarAttrs(status)
+	_, icon := c.config.TabStatus.ContentTab.BarAttrs(status)
 	return icon
 }
 

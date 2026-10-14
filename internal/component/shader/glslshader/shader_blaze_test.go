@@ -19,6 +19,8 @@ package glslshader
 import (
 	"testing"
 
+	"github.com/unstablebuild/rune-go-sdk/term"
+	"unstable.build/rune/internal/component/shader"
 	"unstable.build/rune/internal/component/shader/shadertest"
 )
 
@@ -53,5 +55,13 @@ func TestBlazePaintForeground(t *testing.T) {
 
 	t.Run("leaves background glyphs bare", func(t *testing.T) {
 		assertPaintsOnlyText(t, Blaze(params, 30))
+	})
+}
+
+func TestBlazeColor(t *testing.T) {
+	assertTurnsHue(t, func(col term.Color) shader.Shader {
+		p := DefaultBlazeParams()
+		p.Color = col
+		return Blaze(p, 30)
 	})
 }

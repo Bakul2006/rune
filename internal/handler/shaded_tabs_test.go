@@ -101,6 +101,39 @@ func TestShadedTabsLeavesIconsAlone(t *testing.T) {
 	require.True(t, painted, "the effect never painted the active tab's name")
 }
 
+func TestShadedTabsColor(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	s := newTestShadedTabs(ShadedTabsConfig{
+		Shader: "pulse",
+		FPS:    100,
+		Params: shaderloop.Params{
+			Pulse: shaderloop.PulseParams{Color: term.NewRGBColor(0, 255, 0)},
+		},
+		DefAttr:     term.Attributes{Fg: term.NewRGBColor(0, 0, 0)},
+		Interrupter: term.NopInterrupter(),
+		Active:      func() []int { return []int{1} },
+	})
+	plain := drawShadedTabs(s)
+	require.True(t, s.SetRunning(true))
+	defer s.SetRunning(false)
+	painted := false
+	for deadline := time.Now().Add(5 * time.Second); !painted && time.Now().Before(deadline); {
+		cells := drawShadedTabs(s)
+		// beta's name sits at [11, 15).
+		for x := 11; x < 15; x++ {
+			if cells[x].Fg == plain[x].Fg {
+				continue
+			}
+			painted = true
+			r, g, b := cells[x].Fg.RGB()
+			assert.Truef(t, r == 0 && g > 0 && b == 0,
+				"cell %d blends toward green: rgb(%d, %d, %d)", x, r, g, b)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.True(t, painted, "the effect never painted the active tab's name")
+}
+
 func TestShadedTabsWithoutShaderDrawsTabs(t *testing.T) {
 	active := func() []int { return []int{0} }
 	for _, tc := range []struct {

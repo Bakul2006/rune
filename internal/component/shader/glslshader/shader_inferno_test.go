@@ -60,6 +60,43 @@ func TestInfernoPaintForeground(t *testing.T) {
 	})
 }
 
+func TestInfernoColor(t *testing.T) {
+	assertTurnsHue(t, func(col term.Color) shader.Shader {
+		p := DefaultInfernoParams()
+		p.Color = col
+		return Inferno(p, 30)
+	})
+}
+
+// assertTurnsHue checks a fire's Color: red, a grey or none leave the
+// fire as it is, and green, a third of a turn from red, rotates every
+// painted colour's channels from (r, g, b) to (b, r, g).
+func assertTurnsHue(t *testing.T, fire func(term.Color) shader.Shader) {
+	t.Helper()
+	shade := func(col term.Color) [][]term.Cell {
+		cells := paintTestCells()
+		fire(col).Shade(3, 20, cells)
+		return cells
+	}
+	red := shade(term.ColorDefault)
+	for _, col := range []term.Color{term.NewRGBColor(255, 0, 0), term.NewRGBColor(128, 128, 128)} {
+		assert.Equal(t, red, shade(col), "%s keeps the fire red", col)
+	}
+	green := shade(term.NewRGBColor(0, 255, 0))
+	assert.NotEqual(t, red, green)
+	for y, row := range red {
+		for x, cell := range row {
+			r, g, b := cell.Bg.RGB()
+			gr, gg, gb := green[y][x].Bg.RGB()
+			for i, pair := range [][2]int32{{b, gr}, {r, gg}, {g, gb}} {
+				assert.InDeltaf(t, pair[0], pair[1], 1,
+					"cell %d,%d channel %d: red fire %v, green fire %v",
+					x, y, i, []int32{r, g, b}, []int32{gr, gg, gb})
+			}
+		}
+	}
+}
+
 // assertPaintsChannel shades a matrix of glyph-carrying cells and checks
 // that the effect landed on the character colour when asked to, and on
 // the cell background otherwise, leaving the other channel untouched.

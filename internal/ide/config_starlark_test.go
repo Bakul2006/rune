@@ -35,6 +35,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/browser"
+	"unstable.build/rune/internal/component/shader/shaderloop"
 	"unstable.build/rune/internal/handler"
 	"unstable.build/rune/internal/ide/idepreset"
 	"unstable.build/rune/internal/workspace"
@@ -368,9 +369,39 @@ func TestRuneStarFixture(t *testing.T) {
 				params:   c.params,
 			})
 			require.NoError(t, err)
-			status := cfg["terminal"].(map[string]any)["status"].(map[string]any)
-			assert.Equal(t, false, status["progress"])
 			c.checks(t, cfg)
+
+			var ide ideConfig
+			initConfig(&ide, cfg, browser.NopWallpaper(), term.RingBell, term.ScheduleNextTick, "")
+			status := ide.tabStatusConfig()
+			assert.False(t, status.ContentTab.Progress)
+			ws := status.WorkspaceTab
+			assert.True(t, ws.Progress)
+			green := term.Attributes{Fg: term.ColorGreen}
+			assert.Equal(t, green, ws.WorkingDoneAttr)
+			assert.Equal(t, green, ws.DoneAttr)
+			assert.Equal(t, term.Attributes{Fg: term.ColorYellow}, ws.BlockedAttr)
+			assert.Equal(t, term.Attributes{Fg: term.ColorRed}, ws.ErrorAttr)
+			for _, icon := range []term.Attributes{
+				ws.IdleIconAttr, ws.WorkingIconAttr, ws.BlockedIconAttr,
+				ws.DoneIconAttr, ws.ErrorIconAttr,
+			} {
+				assert.Zero(t, icon, "workspace tab icons keep the bar's own attributes")
+			}
+			assert.Equal(t, "shine", ide.animationsActiveTabShader(animActiveWorkspaceTab))
+			defaults := shaderloop.DefaultParams()
+			assert.Equal(t, defaults, ide.animationsActiveTabParams(animActiveContentTab),
+				"rune.star spells out the defaults for content tabs")
+			wsParams := ide.animationsActiveTabParams(animActiveWorkspaceTab)
+			wsShine := wsParams.Shine
+			assert.Equal(t, term.ColorGreen, wsShine.Color,
+				"the effect shines toward the colour progress paints")
+			assert.Greater(t, wsShine.Intensity, 0.5, "the green shine is plainly visible")
+			assert.Positive(t, wsShine.BandWidth)
+			assert.Equal(t, defaults.Shine.Direction, wsShine.Direction)
+			wsParams.Shine = defaults.Shine
+			assert.Equal(t, defaults, wsParams, "workspace tabs only retune the shine")
+			assert.Empty(t, ide.errors)
 		})
 	}
 }

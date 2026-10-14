@@ -34,6 +34,7 @@ import (
 	"unstable.build/rune/internal/browser"
 	"unstable.build/rune/internal/cell"
 	"unstable.build/rune/internal/component/markdown"
+	"unstable.build/rune/internal/component/shader/shaderloop"
 	"unstable.build/rune/internal/handler"
 	"unstable.build/rune/internal/handler/command"
 	"unstable.build/rune/internal/ide/idelsp/languages"
@@ -737,13 +738,16 @@ func WithDirtyTabAttr(attr term.Attributes) Option {
 
 // WithActiveTabShader defines the continuous effect run over the labels
 // of tabs whose program reported working via SetTabStatus, and its
-// cadence. An empty
-// name disables it; zero fps or loop keep the catalog defaults.
-func WithActiveTabShader(name string, fps int, loop time.Duration) Option {
+// cadence, colour and strength. An empty name disables it; zero fps,
+// loop or params keep the catalog defaults.
+func WithActiveTabShader(
+	name string, fps int, loop time.Duration, params shaderloop.Params,
+) Option {
 	return func(cfg *Config) {
 		cfg.ActiveTabShader = name
 		cfg.ActiveTabShaderFPS = fps
 		cfg.ActiveTabShaderLoop = loop
+		cfg.ActiveTabShaderParams = params
 	}
 }
 

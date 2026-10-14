@@ -57,6 +57,143 @@ func loopFrames(fps int, loop time.Duration) int {
 	return int(float64(fps) * loop.Seconds())
 }
 
+// Params tunes the effects New builds, each under its own name; an
+// effect only reads its own. Zero values keep the catalog's own tuning,
+// which is deliberately subtle so the effect does not repaint text
+// whose colour carries meaning, and paints the text alone so the label
+// stays readable.
+type Params struct {
+	Blaze   FireParams
+	Burn    BurnParams
+	Inferno FireParams
+	Noise   NoiseParams
+	Pulse   PulseParams
+	Shine   ShineParams
+	Trippy  TrippyParams
+}
+
+// DefaultParams spells out the tuning the zero Params stands for. New
+// paints the same with either.
+func DefaultParams() Params {
+	burn := shader.DefaultBurnParams()
+	noise := glslshader.DefaultNoiseParams()
+	shine := glslshader.DefaultShineParams()
+	// The fire's red: a hue it is turned no way from.
+	fire := FireParams{Color: term.NewRGBColor(255, 0, 0)}
+	return Params{
+		Blaze: fire,
+		Burn: BurnParams{
+			Gradient: burn.BurnGradient,
+			Duration: burn.BurnDuration,
+			Seed:     burn.Seed,
+		},
+		Inferno: fire,
+		Noise: NoiseParams{
+			Speed:     noise.Speed,
+			Amplitude: noise.Amplitude,
+			Scale:     noise.ScaleX,
+		},
+		Pulse: PulseParams{
+			Color:     shader.DefaultPulseParams().Color,
+			Intensity: pulseIntensity,
+		},
+		Shine: ShineParams{
+			Color:     shine.Color,
+			Intensity: shineIntensity,
+			BandWidth: shineBandWidth,
+			Direction: shine.Direction,
+		},
+		Trippy: TrippyParams{Speed: glslshader.DefaultTrippyParams().Speed},
+	}
+}
+
+// FireParams tunes the blaze and inferno effects.
+type FireParams struct {
+	// AnimateBackground paints the fire on the cell background rather
+	// than on the text.
+	AnimateBackground bool
+	// Color, unless term.ColorDefault, is the hue the fire burns in: its
+	// red turns to the hue of Color, keeping the flames' light and shade.
+	// A grey leaves the fire red.
+	Color term.Color
+	// SwapRedBlue burns blue rather than red, which does not read as an
+	// error the way red does. It applies after Color.
+	SwapRedBlue bool
+}
+
+// BurnParams tunes the burn effect, a wave that crosses the label once
+// per loop.
+type BurnParams struct {
+	// AnimateBackground burns the label, each cell cycling through fire
+	// glyphs as the wave crosses it, rather than only recolouring the
+	// text.
+	AnimateBackground bool
+	// Gradient replaces the colours a cell goes through while it burns,
+	// from ignition to ash. Empty keeps the fire colours.
+	Gradient []term.Color
+	// Duration, in (0, 1], is the fraction of a loop each cell burns
+	// for. Shorter reads as a narrow wave front.
+	Duration float64
+	// Seed picks another, equally repeatable, burn order. Zero keeps the
+	// default one.
+	Seed int64
+	// FixedOrigin starts the wave at Origin, in [0, 1] across the label
+	// from its left edge, rather than at a random character of it.
+	FixedOrigin bool
+	Origin      float64
+}
+
+// NoiseParams tunes the noise effect. Positive values replace the
+// defaults; anything else keeps them.
+type NoiseParams struct {
+	// AnimateBackground paints the noise on the cell background and
+	// scatters glyphs over its brightest parts, rather than shading the
+	// text.
+	AnimateBackground bool
+	// Speed scales how fast the noise field moves.
+	Speed float64
+	// Amplitude scales the contrast of the noise field.
+	Amplitude float64
+	// Scale is the size of the noise field across the label: larger
+	// packs more, finer, detail into it.
+	Scale float64
+}
+
+// TrippyParams tunes the trippy effect.
+type TrippyParams struct {
+	// AnimateBackground paints the colours on the cell background and
+	// clears the text, rather than colouring the text.
+	AnimateBackground bool
+	// Speed, when positive, scales how fast the colours cycle.
+	Speed float64
+}
+
+// PulseParams tunes the pulse effect.
+type PulseParams struct {
+	// Color replaces the white text is blended toward, unless it is
+	// term.ColorDefault.
+	Color term.Color
+	// Intensity, in (0, 1], is how far text is blended toward Color at
+	// the peak of the pulse: 1 reaches it.
+	Intensity float64
+}
+
+// ShineParams tunes the shine effect.
+type ShineParams struct {
+	// Color replaces the white text is blended toward, unless it is
+	// term.ColorDefault.
+	Color term.Color
+	// Intensity, in (0, 1], is how far text is blended toward Color at
+	// the centre of the band: 1 reaches it.
+	Intensity float64
+	// BandWidth, in (0, 1], is how much of the label the band spans.
+	// Narrower reads as a glint sweeping across, wider as a wash.
+	BandWidth float64
+	// Direction is the way the band sweeps across the label. The zero
+	// value is the default, bottom-left to top-right.
+	Direction glslshader.Direction
+}
+
 // Names lists the effects New accepts. The frame shaders are
 // deliberately absent: they only paint box-drawing characters, of which
 // a row of text has none. Incendium costs too much to run for the
@@ -73,7 +210,7 @@ func Names() []string {
 // for as long as the work runs, either by looping its animation every
 // loop or by running its own clock. It reports false for unknown names.
 func New(
-	name string, defAttr term.Attributes, fps int, loop time.Duration,
+	name string, defAttr term.Attributes, p Params, fps int, loop time.Duration,
 ) (shader.Shader, bool) {
 	fpsf := float64(fps)
 	var inner shader.Shader
@@ -85,33 +222,60 @@ func New(
 	switch name {
 	case "blaze":
 		blazeParams := glslshader.DefaultBlazeParams()
-		blazeParams.PaintForeground = true
+		blazeParams.PaintForeground = !p.Blaze.AnimateBackground
+		blazeParams.Color = p.Blaze.Color
+		blazeParams.SwapRedBlue = p.Blaze.SwapRedBlue
 		inner, continuous = glslshader.Blaze(blazeParams, fpsf), true
 	case "burn":
 		burnParams := shader.DefaultBurnParams()
-		burnParams.PaintForeground = true
+		burnParams.PaintForeground = !p.Burn.AnimateBackground
+		if len(p.Burn.Gradient) > 0 {
+			burnParams.BurnGradient = p.Burn.Gradient
+		}
+		burnParams.BurnDuration = fractionOr(p.Burn.Duration, burnParams.BurnDuration)
+		if p.Burn.Seed != 0 {
+			burnParams.Seed = p.Burn.Seed
+		}
+		if p.Burn.FixedOrigin {
+			burnParams.FixedOrigin = true
+			burnParams.OriginX = p.Burn.Origin
+		}
 		inner = shader.Burn(burnParams, defAttr)
 	case "inferno":
 		infernoParams := glslshader.DefaultInfernoParams()
-		infernoParams.PaintForeground = true
+		infernoParams.PaintForeground = !p.Inferno.AnimateBackground
+		infernoParams.Color = p.Inferno.Color
+		infernoParams.SwapRedBlue = p.Inferno.SwapRedBlue
 		inner, continuous = glslshader.Inferno(infernoParams, fpsf), true
 	case "noise":
 		noiseParams := glslshader.DefaultNoiseParams()
-		noiseParams.PaintForeground = true
+		noiseParams.PaintForeground = !p.Noise.AnimateBackground
+		noiseParams.Speed = positiveOr(p.Noise.Speed, noiseParams.Speed)
+		noiseParams.Amplitude = positiveOr(p.Noise.Amplitude, noiseParams.Amplitude)
+		noiseParams.ScaleX = positiveOr(p.Noise.Scale, noiseParams.ScaleX)
+		noiseParams.ScaleY = positiveOr(p.Noise.Scale, noiseParams.ScaleY)
 		inner, continuous = glslshader.Noise(noiseParams, fpsf), true
 	case "pulse":
 		params := shader.DefaultPulseParams()
 		params.PeriodFrames = loopFrames(fps, loop)
-		params.Intensity = pulseIntensity
+		params.Intensity = fractionOr(p.Pulse.Intensity, pulseIntensity)
+		if p.Pulse.Color != term.ColorDefault {
+			params.Color = p.Pulse.Color
+		}
 		inner, continuous = shader.Pulse(params, defAttr), true
 	case "shine":
 		shineParams := glslshader.DefaultShineParams()
-		shineParams.BandWidth = shineBandWidth
-		shineParams.Intensity = shineIntensity
+		shineParams.BandWidth = fractionOr(p.Shine.BandWidth, shineBandWidth)
+		shineParams.Intensity = fractionOr(p.Shine.Intensity, shineIntensity)
+		if p.Shine.Color != term.ColorDefault {
+			shineParams.Color = p.Shine.Color
+		}
+		shineParams.Direction = p.Shine.Direction
 		inner = glslshader.Shine(shineParams, defAttr)
 	case "trippy":
 		trippyParams := glslshader.DefaultTrippyParams()
-		trippyParams.PaintForeground = true
+		trippyParams.PaintForeground = !p.Trippy.AnimateBackground
+		trippyParams.Speed = positiveOr(p.Trippy.Speed, trippyParams.Speed)
 		inner, continuous = glslshader.Trippy(trippyParams, fpsf), true
 	default:
 		return nil, false
@@ -120,4 +284,20 @@ func New(
 		return inner, true
 	}
 	return timeshader.Loop(inner, int(Duration/loop)), true
+}
+
+// fractionOr returns v, or def when v is not in (0, 1].
+func fractionOr(v, def float64) float64 {
+	if v <= 0 || v > 1 {
+		return def
+	}
+	return v
+}
+
+// positiveOr returns v, or def when v is not positive.
+func positiveOr(v, def float64) float64 {
+	if v <= 0 {
+		return def
+	}
+	return v
 }

@@ -364,24 +364,33 @@ terminal:
             auth: "A"
             done: "D"
             error: "E"
-        idle_icon_attr:
-            fg: green
-        working_icon_attr:
-            fg: teal
-        working_done_attr:
-            fg: lime
-        blocked_attr:
-            fg: olive
-        blocked_icon_attr:
-            fg: maroon
-        done_attr:
-            fg: navy
-        done_icon_attr:
-            fg: purple
-        error_attr:
-            fg: fuchsia
-        error_icon_attr:
-            fg: aqua
+        content_tab:
+            progress: true
+            idle_icon_attr:
+                fg: green
+            working_icon_attr:
+                fg: teal
+            working_done_attr:
+                fg: lime
+            blocked_attr:
+                fg: olive
+            blocked_icon_attr:
+                fg: maroon
+            done_attr:
+                fg: navy
+            done_icon_attr:
+                fg: purple
+            error_attr:
+                fg: fuchsia
+            error_icon_attr:
+                fg: aqua
+        workspace_tab:
+            working_done_attr:
+                fg: blue
+            blocked_attr:
+                fg: white
+            error_icon_attr:
+                fg: black
         notify:
           - blocked
           - error
@@ -511,31 +520,41 @@ func TestConfigDefault(t *testing.T) {
 }
 
 func TestTabStatusConfigProgress(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		status  map[string]any
-		want    bool
-		wantErr bool
-	}{
-		{name: "no status config"},
-		{name: "missing", status: map[string]any{}},
-		{name: "disabled", status: map[string]any{"progress": false}},
-		{name: "enabled", status: map[string]any{"progress": true}, want: true},
-		{name: "invalid", status: map[string]any{"progress": "true"}, wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := ideConfig{cfg: map[string]any{}, errors: map[string]error{}}
-			if tc.status != nil {
-				cfg.cfg["terminal"] = map[string]any{"status": tc.status}
-			}
-			assert.Equal(t, tc.want, cfg.tabStatusConfig().Progress)
-			assert.True(t, cfg.tabStatusEnabled())
-			if tc.wantErr {
-				assert.Error(t, cfg.errors["terminal.status.progress"])
-			} else {
-				assert.Empty(t, cfg.errors)
-			}
-		})
+	for _, key := range []string{"content_tab", "workspace_tab"} {
+		for _, tc := range []struct {
+			name    string
+			status  map[string]any
+			want    bool
+			wantErr bool
+		}{
+			{name: "no status config"},
+			{name: "missing", status: map[string]any{}},
+			{name: "missing progress", status: map[string]any{key: map[string]any{}}},
+			{name: "top level is ignored", status: map[string]any{"progress": true}},
+			{name: "disabled", status: map[string]any{key: map[string]any{"progress": false}}},
+			{name: "enabled", status: map[string]any{key: map[string]any{"progress": true}}, want: true},
+			{name: "invalid", status: map[string]any{key: map[string]any{"progress": "true"}}, wantErr: true},
+		} {
+			t.Run(key+"/"+tc.name, func(t *testing.T) {
+				cfg := ideConfig{cfg: map[string]any{}, errors: map[string]error{}}
+				if tc.status != nil {
+					cfg.cfg["terminal"] = map[string]any{"status": tc.status}
+				}
+				got := cfg.tabStatusConfig()
+				style, other := got.ContentTab, got.WorkspaceTab
+				if key == "workspace_tab" {
+					style, other = other, style
+				}
+				assert.Equal(t, tc.want, style.Progress)
+				assert.False(t, other.Progress, "progress is set per kind of tab")
+				assert.True(t, cfg.tabStatusEnabled())
+				if tc.wantErr {
+					assert.Error(t, cfg.errors["terminal.status."+key+".progress"])
+				} else {
+					assert.Empty(t, cfg.errors)
+				}
+			})
+		}
 	}
 }
 
@@ -1679,17 +1698,27 @@ func TestConfigSetting(t *testing.T) {
 			programstatus.KindQuestion:   'Q',
 			programstatus.KindAuth:       'A',
 		},
-		DoneIcon:        'D',
-		ErrorIcon:       'E',
-		IdleIconAttr:    term.Attributes{Fg: term.ColorGreen},
-		WorkingIconAttr: term.Attributes{Fg: term.ColorTeal},
-		WorkingDoneAttr: term.Attributes{Fg: term.ColorLime},
-		BlockedAttr:     term.Attributes{Fg: term.ColorOlive},
-		BlockedIconAttr: term.Attributes{Fg: term.ColorMaroon},
-		DoneAttr:        term.Attributes{Fg: term.ColorNavy},
-		DoneIconAttr:    term.Attributes{Fg: term.ColorPurple},
-		ErrorAttr:       term.Attributes{Fg: term.ColorFuchsia},
-		ErrorIconAttr:   term.Attributes{Fg: term.ColorAqua},
+		DoneIcon:  'D',
+		ErrorIcon: 'E',
+		ContentTab: browser.TabStatusStyle{
+			Progress:        true,
+			IdleIconAttr:    term.Attributes{Fg: term.ColorGreen},
+			WorkingIconAttr: term.Attributes{Fg: term.ColorTeal},
+			WorkingDoneAttr: term.Attributes{Fg: term.ColorLime},
+			BlockedAttr:     term.Attributes{Fg: term.ColorOlive},
+			BlockedIconAttr: term.Attributes{Fg: term.ColorMaroon},
+			DoneAttr:        term.Attributes{Fg: term.ColorNavy},
+			DoneIconAttr:    term.Attributes{Fg: term.ColorPurple},
+			ErrorAttr:       term.Attributes{Fg: term.ColorFuchsia},
+			ErrorIconAttr:   term.Attributes{Fg: term.ColorAqua},
+		},
+		WorkspaceTab: func() browser.TabStatusStyle {
+			style := browser.DefaultTabStatusConfig().WorkspaceTab
+			style.WorkingDoneAttr = term.Attributes{Fg: term.ColorBlue}
+			style.BlockedAttr = term.Attributes{Fg: term.ColorWhite}
+			style.ErrorIconAttr = term.Attributes{Fg: term.ColorBlack}
+			return style
+		}(),
 	}, cfg.tabStatusConfig())
 	assert.Equal(t, tabStatusNotifyConfig{
 		states: map[programstatus.State]bool{

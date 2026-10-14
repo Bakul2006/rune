@@ -46,11 +46,16 @@ func TestStatusInboxEntries(t *testing.T) {
 	pty := parse("file:///dev/ttys042")
 	// Without icons the rows start with the state's name.
 	in := statusInbox{cfg: browser.TabStatusConfig{
-		BlockedAttr:     term.Attributes{Fg: term.ColorYellow},
-		ErrorAttr:       term.Attributes{Fg: term.ColorRed},
-		DoneIconAttr:    term.Attributes{Fg: term.ColorSilver},
-		IdleIconAttr:    term.Attributes{Fg: term.ColorBlue},
-		WorkingIconAttr: term.Attributes{Fg: term.ColorBlue},
+		ContentTab: browser.TabStatusStyle{
+			BlockedAttr:     term.Attributes{Fg: term.ColorYellow},
+			ErrorAttr:       term.Attributes{Fg: term.ColorRed},
+			DoneIconAttr:    term.Attributes{Fg: term.ColorSilver},
+			IdleIconAttr:    term.Attributes{Fg: term.ColorBlue},
+			WorkingIconAttr: term.Attributes{Fg: term.ColorBlue},
+		},
+		WorkspaceTab: browser.TabStatusStyle{
+			BlockedAttr: term.Attributes{Fg: term.ColorPurple},
+		},
 	}}
 
 	assert.Empty(t, in.entries(nil))

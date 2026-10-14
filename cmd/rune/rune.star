@@ -223,23 +223,6 @@ config = {
         # to "> " when empty.
         "prompt": "rune> ",
     },
-    # Toggle workspace transition animations.
-    #
-    # Both default to True. Setting either to False suppresses the
-    # corresponding animation; everything else (init/shutdown
-    # shaders, the :shaderrun command, ...) is unaffected.
-    #
-    # The open animation is only ever played after a loading
-    # animation, so disabling "loading_workspace" effectively
-    # disables both.
-    #
-    # "open_workspace" also accepts a dict to override the shader
-    # name and lifetime used for the open transition:
-    #
-    #
-    # "shader" accepts any of the names listed by :shaderrun and
-    # "duration" accepts any Go duration string. Both keys are
-    # optional and fall back to the built-in defaults.
     "animations": {
         # Plays while a workspace is being installed
         # (addWorkspace). The default gray-fade desaturates the
@@ -260,26 +243,101 @@ config = {
             "angular_width": 0.33,
             "cycles": 1,
         },
-        # Plays over content tabs that an extension marks as having
-        # work in progress (e.g. a rune-agent turn), until the work
-        # ends or the tab closes. "shader" is one of blaze, burn,
-        # inferno, noise, pulse, shine or trippy. "fps" is the redraw
-        # cadence and "loop" how long one visual loop lasts, as a Go
-        # duration string.
+        # Plays over content tabs whose program reports it is working.
+        # "shader" is one of blaze, burn, inferno, noise, pulse, shine or
+        # trippy. Settings for one shader go under a key named after it;
+        # see "Tab animations" in the Config docs.
         "active_content_tab": {
             "enabled": True,
             "shader":  "shine",
             "fps":     10,
-            "loop":    "1400ms",
+            "loop":    "2400ms",
+            "blaze": {
+                "animate_background": False,
+                "color":              "#ff0000",
+                "swap_red_blue":      False,
+            },
+            "burn": {
+                "animate_background": False,
+                "gradient": [
+                    "#ffffff", "#fff75d", "#fe650d", "#8a003c", "#510100",
+                ],
+                "duration":           0.15,
+                "seed":               1,
+                "origin":             None,  # a random character
+            },
+            "inferno": {
+                "animate_background": False,
+                "color":              "#ff0000",
+                "swap_red_blue":      False,
+            },
+            "noise": {
+                "animate_background": False,
+                "speed":              1.0,
+                "amplitude":          1.0,
+                "scale":              5.0,
+            },
+            "pulse": {
+                "color":     "#ffffff",
+                "intensity": 0.25,
+            },
+            "shine": {
+                "color":      "#ffffff",
+                "intensity":  0.3,
+                "band_width": 0.75,
+                "direction":  "bottom_left_to_top_right",
+            },
+            "trippy": {
+                "animate_background": False,
+                "speed":              1.0,
+            },
         },
-        # Plays over the workspace tabs that own an active content
-        # tab, whether or not the workspace is focused. Takes the same
-        # keys as active_content_tab.
+        # Plays over workspace tabs that own an active content tab. The
+        # green shine makes the tab read as turning green as progress fills.
         "active_workspace_tab": {
             "enabled": True,
             "shader":  "shine",
             "fps":     10,
-            "loop":    "1400ms",
+            "loop":    "2400ms",
+            "blaze": {
+                "animate_background": False,
+                "color":              "#ff0000",
+                "swap_red_blue":      False,
+            },
+            "burn": {
+                "animate_background": False,
+                "gradient": [
+                    "#ffffff", "#fff75d", "#fe650d", "#8a003c", "#510100",
+                ],
+                "duration":           0.15,
+                "seed":               1,
+                "origin":             None,  # a random character
+            },
+            "inferno": {
+                "animate_background": False,
+                "color":              "#ff0000",
+                "swap_red_blue":      False,
+            },
+            "noise": {
+                "animate_background": False,
+                "speed":              1.0,
+                "amplitude":          1.0,
+                "scale":              5.0,
+            },
+            "pulse": {
+                "color":     "#ffffff",
+                "intensity": 0.25,
+            },
+            "shine": {
+                "color":      "green",
+                "intensity":  0.8,
+                "band_width": 0.4,
+                "direction":  "bottom_left_to_top_right",
+            },
+            "trippy": {
+                "animate_background": False,
+                "speed":              1.0,
+            },
         },
     },
     # Self-upgrade configuration. Rune polls a public manifest endpoint
@@ -962,9 +1020,6 @@ config = {
         # `runectl status` or agent harnesses like claude code.
         "status": {
             "enabled":  True,
-            # Split content and workspace tab labels at reported progress.
-            # False keeps activity animations over the full label.
-            "progress": False,
             # Icons shown for a blocked tab by kind, and for done and error
             # tabs. The defaults are Nerd Font glyphs.
             "icons": {
@@ -976,16 +1031,42 @@ config = {
             },
             "spinner":     "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏",
             "spinner_fps": 10,
-            # Colour of the completed part when progress is enabled.
-            "working_done_attr": attr(fg = "default", bg = "default"),
-            "blocked_attr":      attr(fg = "default", bg = "default"),
-            "done_attr":         attr(fg = "default", bg = "default"),
-            "error_attr":        attr(fg = "default", bg = "default"),
-            "idle_icon_attr":    attr(fg = "yellow"),
-            "working_icon_attr": attr(fg = "yellow"),
-            "done_icon_attr":    attr(fg = "green"),
-            "blocked_icon_attr": attr(fg = "yellow"),
-            "error_icon_attr":   attr(fg = "red"),
+            # How content tabs (files, terminals, agent chats) reflect the
+            # status their program reported. "progress" splits the label at
+            # the reported percentage, painting the completed part with
+            # "working_done_attr" and leaving the rest to the
+            # animations.active_content_tab effect; False keeps the effect
+            # over the full label. The *_attr keys style the tab name in that
+            # state and the *_icon_attr keys its icon; "default" colours keep
+            # the tab's own.
+            "content_tab": {
+                "progress":          False,
+                "working_done_attr": attr(fg = "default", bg = "default"),
+                "blocked_attr":      attr(fg = "default", bg = "default"),
+                "done_attr":         attr(fg = "default", bg = "default"),
+                "error_attr":        attr(fg = "default", bg = "default"),
+                "idle_icon_attr":    attr(fg = "yellow"),
+                "working_icon_attr": attr(fg = "yellow"),
+                "done_icon_attr":    attr(fg = "green"),
+                "blocked_icon_attr": attr(fg = "yellow"),
+                "error_icon_attr":   attr(fg = "red"),
+            },
+            # How workspace tabs reflect the most pressing status among the
+            # tabs of their workspace. Takes the same keys as content_tab,
+            # with the remainder of a working label left to the
+            # animations.active_workspace_tab effect.
+            "workspace_tab": {
+                "progress":          True,
+                "working_done_attr": attr(fg = "green"),
+                "blocked_attr":      attr(fg = "yellow"),
+                "done_attr":         attr(fg = "green"),
+                "error_attr":        attr(fg = "red"),
+                "idle_icon_attr":    attr(fg = "default", bg = "default"),
+                "working_icon_attr": attr(fg = "default", bg = "default"),
+                "done_icon_attr":    attr(fg = "default", bg = "default"),
+                "blocked_icon_attr": attr(fg = "default", bg = "default"),
+                "error_icon_attr":   attr(fg = "default", bg = "default"),
+            },
             # States a tab entering raises a notification for while it is out
             # of sight, and the minimum time between two such notifications
             # for the same tab. Every new message a program reports is

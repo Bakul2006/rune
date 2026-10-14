@@ -1125,7 +1125,10 @@ func TestWorkspaceBarStatusProgress(t *testing.T) {
 		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
 			cfg := defaultConfigWithWrap(false)
 			cfg.cfg["terminal"] = map[string]any{
-				"status": map[string]any{"progress": enabled},
+				"status": map[string]any{
+					"content_tab":   map[string]any{"progress": !enabled},
+					"workspace_tab": map[string]any{"progress": enabled},
+				},
 			}
 			cfg.cfg["animations"] = map[string]any{
 				"active_workspace_tab": map[string]any{"shader": "shine"},
@@ -1181,14 +1184,16 @@ func TestWorkspaceBarStatusProgress(t *testing.T) {
 func TestWorkspaceBarStatusRollup(t *testing.T) {
 	cfg := defaultConfigWithWrap(false)
 	cfg.cfg["terminal"] = map[string]any{
-		"status": map[string]any{"progress": true},
+		"status": map[string]any{
+			"workspace_tab": map[string]any{"progress": true},
+		},
 	}
 	m, slot := newActivityTestManager(t, cfg)
 	chat, err := workspaceapi.ParseURI("rune-agent://model/rolling-fox")
 	require.NoError(t, err)
 	other, err := workspaceapi.ParseURI("rune-agent://model/other")
 	require.NoError(t, err)
-	status := browser.DefaultTabStatusConfig()
+	status := browser.DefaultTabStatusConfig().WorkspaceTab
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1209,8 +1214,8 @@ func TestWorkspaceBarStatusRollup(t *testing.T) {
 	require.NoError(t, comp.SetTabStatus(chat, workingStatus()))
 	assert.Equal(t, term.Attributes{}, m.bar.TabAttr(barIdx),
 		"working keeps the name attribute")
-	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.WorkingIconAttr),
-		m.bar.TabIconAttr(barIdx))
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx),
+		"the icon keeps the bar's own attributes")
 	assert.True(t, m.shadedBar.Running())
 	pct, _ := m.bar.TabProgress(barIdx)
 	assert.Equal(t, -1, pct, "indeterminate progress paints nothing")
@@ -1234,8 +1239,7 @@ func TestWorkspaceBarStatusRollup(t *testing.T) {
 	require.NoError(t, comp.SetTabStatus(other, done))
 	assert.Equal(t, status.DoneAttr, m.bar.TabAttr(barIdx),
 		"done outranks working")
-	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.DoneIconAttr),
-		m.bar.TabIconAttr(barIdx))
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx))
 	assert.False(t, m.shadedBar.Running(), "the effect runs only while working")
 	pct, _ = m.bar.TabProgress(barIdx)
 	assert.Equal(t, -1, pct, "progress goes with the working roll-up")
@@ -1243,6 +1247,15 @@ func TestWorkspaceBarStatusRollup(t *testing.T) {
 	blocked := programstatus.Report{State: programstatus.Blocked, Progress: -1}
 	require.NoError(t, comp.SetTabStatus(chat, blocked))
 	assert.Equal(t, status.BlockedAttr, m.bar.TabAttr(barIdx))
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx))
+
+	failed := programstatus.Report{State: programstatus.Error, Progress: -1}
+	require.NoError(t, comp.SetTabStatus(other, failed))
+	assert.Equal(t, status.BlockedAttr, m.bar.TabAttr(barIdx), "blocked outranks error")
+	require.NoError(t, comp.SetTabStatus(chat, done))
+	assert.Equal(t, status.ErrorAttr, m.bar.TabAttr(barIdx), "error outranks done")
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx))
+	require.NoError(t, comp.SetTabStatus(chat, blocked))
 
 	// The bell ranks below the status.
 	m.workspaces[slot].bellAttr = term.Attributes{Attrs: term.AttrBlink}
@@ -1258,8 +1271,7 @@ func TestWorkspaceBarStatusRollup(t *testing.T) {
 
 	reportedIdle := programstatus.Report{State: programstatus.Idle, Progress: -1}
 	require.NoError(t, comp.SetTabStatus(chat, reportedIdle))
-	assert.Equal(t, term.AttributesUnion(m.barNonFocusIconAttr, status.IdleIconAttr),
-		m.bar.TabIconAttr(barIdx), "a program waiting on the user colours the icon")
+	assert.Equal(t, m.barNonFocusIconAttr, m.bar.TabIconAttr(barIdx))
 	assert.Equal(t, term.Attributes{Attrs: term.AttrBlink}, m.bar.TabAttr(barIdx))
 	assert.False(t, m.shadedBar.Running())
 	require.NoError(t, comp.SetTabStatus(chat, idle))
@@ -1308,7 +1320,7 @@ func TestWorkspaceBarStatusFromTerminalWithoutTab(t *testing.T) {
 	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
 	pty, err := workspaceapi.ParseURI("file:///dev/ttys042")
 	require.NoError(t, err)
-	status := browser.DefaultTabStatusConfig()
+	status := browser.DefaultTabStatusConfig().WorkspaceTab
 
 	m.mu.Lock()
 	w := m.workspaces[slot]
@@ -1441,7 +1453,7 @@ func TestStatusSources(t *testing.T) {
 func TestPermissionPromptStatus(t *testing.T) {
 	m, slot := newActivityTestManager(t, defaultConfigWithWrap(false))
 	t.Cleanup(func() { _ = m.Close() })
-	status := browser.DefaultTabStatusConfig()
+	status := browser.DefaultTabStatusConfig().WorkspaceTab
 	prompt, err := workspaceapi.ParseURI("ideauthorizer:///prompt/1")
 	require.NoError(t, err)
 

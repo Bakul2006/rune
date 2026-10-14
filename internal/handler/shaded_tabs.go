@@ -36,6 +36,9 @@ type ShadedTabsConfig struct {
 	// shaderloop.DefaultFPS and shaderloop.DefaultLoop.
 	FPS  int
 	Loop time.Duration
+	// Params tunes the colour and strength of the effects that blend
+	// text toward a colour.
+	Params shaderloop.Params
 	// DefAttr resolves term.ColorDefault cells for the effect.
 	DefAttr term.Attributes
 	// Interrupter drives the animation. Without one the bar is never
@@ -95,7 +98,7 @@ func (s *ShadedTabs) SetRunning(running bool) bool {
 	if loop <= 0 {
 		loop = shaderloop.DefaultLoop
 	}
-	inner, ok := shaderloop.New(s.config.Shader, s.config.DefAttr, fps, loop)
+	inner, ok := shaderloop.New(s.config.Shader, s.config.DefAttr, s.config.Params, fps, loop)
 	if !ok {
 		return false
 	}

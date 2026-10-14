@@ -26,6 +26,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/component"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"github.com/unstablebuild/rune-go-sdk/tui"
+	"unstable.build/rune/internal/component/shader/shaderloop"
 	"unstable.build/rune/internal/handler"
 	"unstable.build/rune/internal/term/programstatus"
 )
@@ -66,29 +67,33 @@ func DefaultTabStatusConfig() TabStatusConfig {
 			programstatus.KindQuestion:   '󰋗',
 			programstatus.KindAuth:       '󰗒',
 		},
-		DoneIcon:        '󰗠',
-		ErrorIcon:       '󰅙',
-		IdleIconAttr:    term.Attributes{Fg: term.ColorYellow},
-		WorkingIconAttr: term.Attributes{Fg: term.ColorYellow},
-		WorkingDoneAttr: term.Attributes{Fg: term.ColorGreen},
-		BlockedAttr:     term.Attributes{Fg: term.ColorYellow},
-		BlockedIconAttr: term.Attributes{Fg: term.ColorRed},
-		DoneAttr:        term.Attributes{Fg: term.ColorGreen},
-		DoneIconAttr:    term.Attributes{Fg: term.ColorSilver},
-		ErrorAttr:       term.Attributes{Fg: term.ColorRed},
-		ErrorIconAttr:   term.Attributes{Fg: term.ColorYellow},
+		DoneIcon:  '󰗠',
+		ErrorIcon: '󰅙',
+		ContentTab: TabStatusStyle{
+			IdleIconAttr:    term.Attributes{Fg: term.ColorYellow},
+			WorkingIconAttr: term.Attributes{Fg: term.ColorYellow},
+			WorkingDoneAttr: term.Attributes{Fg: term.ColorGreen},
+			BlockedAttr:     term.Attributes{Fg: term.ColorYellow},
+			BlockedIconAttr: term.Attributes{Fg: term.ColorRed},
+			DoneAttr:        term.Attributes{Fg: term.ColorGreen},
+			DoneIconAttr:    term.Attributes{Fg: term.ColorSilver},
+			ErrorAttr:       term.Attributes{Fg: term.ColorRed},
+			ErrorIconAttr:   term.Attributes{Fg: term.ColorYellow},
+		},
+		WorkspaceTab: TabStatusStyle{
+			WorkingDoneAttr: term.Attributes{Fg: term.ColorGreen},
+			BlockedAttr:     term.Attributes{Fg: term.ColorYellow},
+			DoneAttr:        term.Attributes{Fg: term.ColorGreen},
+			ErrorAttr:       term.Attributes{Fg: term.ColorRed},
+		},
 	}
 }
 
 // TabStatusConfig styles the decorations a Component draws on a tab to
-// reflect the status its program reported via Component.SetTabStatus.
-// Every attribute is layered over the tab's usual one, so colors left
-// at term.ColorDefault keep the configured ones.
+// reflect the status its program reported via Component.SetTabStatus,
+// and those the workspace bar draws from the most pressing status among
+// the tabs of each workspace.
 type TabStatusConfig struct {
-	// Progress enables a completed prefix on working tab labels. When false
-	// (the default), activity animation covers the full label and reported
-	// progress remains available in the tab's status.
-	Progress bool
 	// Spinner holds the frames cycled, at SpinnerFPS frames per second,
 	// as the icon of working tabs. Empty leaves the icon alone; a zero
 	// SpinnerFPS falls back to 10.
@@ -102,6 +107,22 @@ type TabStatusConfig struct {
 	// Zero leaves the icon alone.
 	DoneIcon  rune
 	ErrorIcon rune
+
+	// ContentTab styles the tabs of a Component. WorkspaceTab styles
+	// the tabs of the workspace bar, which a Component never draws.
+	ContentTab   TabStatusStyle
+	WorkspaceTab TabStatusStyle
+}
+
+// TabStatusStyle styles one kind of tab from its status. Every
+// attribute is layered over the tab's usual one, so colors left at
+// term.ColorDefault keep the configured ones, and a zero attribute
+// leaves the tab's own alone.
+type TabStatusStyle struct {
+	// Progress enables a completed prefix on working tab labels. When
+	// false, activity animation covers the full label and reported
+	// progress remains available in the tab's status.
+	Progress bool
 
 	// IdleIconAttr styles the icon of a tab whose program reported
 	// idle, i.e. that it waits on the user; a tab that reported
@@ -125,7 +146,7 @@ type TabStatusConfig struct {
 // BarAttrs returns the name and icon attributes that reflect status:
 // the pair configured for its state, only the icon one for working
 // and for a reported idle, and zero when nothing was reported.
-func (c TabStatusConfig) BarAttrs(status programstatus.Summary) (name, icon term.Attributes) {
+func (c TabStatusStyle) BarAttrs(status programstatus.Summary) (name, icon term.Attributes) {
 	switch status.State {
 	case programstatus.Idle:
 		if len(status.Records) > 0 {
@@ -197,9 +218,12 @@ type Config struct {
 	// tabs whose program reported working via Component.SetTabStatus.
 	// Empty disables it. ActiveTabShaderFPS and ActiveTabShaderLoop tune
 	// the effect and fall back to the catalog defaults when zero.
-	ActiveTabShader     string
-	ActiveTabShaderFPS  int
-	ActiveTabShaderLoop time.Duration
+	// ActiveTabShaderParams tunes the colour and strength of the effects
+	// that blend text toward a colour.
+	ActiveTabShader       string
+	ActiveTabShaderFPS    int
+	ActiveTabShaderLoop   time.Duration
+	ActiveTabShaderParams shaderloop.Params
 	// OnTabStatus is called whenever a tab's status changes, with the
 	// status it had before and the one it has now. A tab removed with a
 	// status reports a change to idle.

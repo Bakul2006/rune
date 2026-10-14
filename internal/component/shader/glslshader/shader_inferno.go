@@ -17,6 +17,8 @@
 package glslshader
 
 import (
+	"math"
+
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/component/shader"
 )
@@ -35,6 +37,7 @@ func Inferno(params InfernoParams, fps float) shader.Shader {
 		c6:            vec3(0.9, 0.9, 0.9),
 		K1:            vec4(0.0, -1.0/3.0, 2.0/3.0, -1.0),
 		K2:            vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0),
+		hue:           colorHue(params.Color),
 	}
 }
 
@@ -42,6 +45,11 @@ func Inferno(params InfernoParams, fps float) shader.Shader {
 type InfernoParams struct {
 	Speed       vec2D
 	SwapRedBlue bool
+	// Color, unless term.ColorDefault, turns the fire's hue so its red
+	// burns in the hue of Color, keeping the flames' light and shade.
+	// Only the hue counts, so a grey leaves the fire red. It applies
+	// before SwapRedBlue.
+	Color term.Color
 	// PaintForeground colours the characters rather than the cell
 	// background, so the fire is only visible through existing text.
 	// Blank cells and glyphs that render as background, such as fade
@@ -69,6 +77,8 @@ type inferno struct {
 	c6  vec3D
 	K1  vec4D
 	K2  vec4D
+	// hue is how far, as a fraction of a turn, Color turns the fire.
+	hue float
 }
 
 func (s *inferno) runCell(
@@ -94,6 +104,11 @@ func (s *inferno) runCell(
 	c := mix3D(s.c1, s.c2, s.fbm(p.add(r))).add(mix3D(s.c3, s.c4, r.x)).sub(mix3D(s.c5, s.c6, r.y))
 	col := c.mult(vec3FromScalar(cos(shift * fragCoord.y / iResolution.y)))
 	col = clamp3D(col, vec3FromScalar(0.0), vec3FromScalar(1.0))
+	if s.hue != 0 {
+		hsv := s.rgb2hsv(col)
+		hsv.x = fract(hsv.x + s.hue)
+		col = s.hsv2rgb(hsv)
+	}
 	col = col.multSc(255.0)
 
 	if s.SwapRedBlue {
@@ -112,6 +127,22 @@ func (s *inferno) runCell(
 
 func (s *inferno) rand(n vec2D) float {
 	return fract(cos(dot2D(n, vec2(12.9898, 4.1414))) * 43758.5453)
+}
+
+func (s *inferno) rgb2hsv(c vec3D) vec3D {
+	p := mix4D(vec4(c.z, c.y, s.K1.w, s.K1.z), vec4(c.y, c.z, s.K1.x, s.K1.y), step(c.z, c.y))
+	q := mix4D(vec4(p.x, p.y, p.w, c.x), vec4(c.x, p.y, p.z, p.x), step(p.x, c.x))
+	d := q.x - math.Min(q.w, q.y)
+	return vec3(abs(q.z+(q.w-q.y)/(6.0*d+mathE)), d/(q.x+mathE), q.x)
+}
+
+func (s *inferno) hsv2rgb(c vec3D) vec3D {
+	p := abs3D(fract3D(c.xxx().add(s.K2.xyz())).multSc(6.0).sub(s.K2.www()))
+	return mix3D(
+		s.K2.xxx(),
+		clamp3D(p.sub(s.K2.xxx()), vec3FromScalar(0.0), vec3FromScalar(1.0)),
+		c.y,
+	).multSc(c.z)
 }
 
 func (s *inferno) noise(n vec2D) float {

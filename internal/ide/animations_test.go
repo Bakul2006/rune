@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"unstable.build/rune/internal/component/shader"
+	"unstable.build/rune/internal/component/shader/glslshader"
 	"unstable.build/rune/internal/component/shader/shaderloop"
 	"unstable.build/rune/internal/ide/idepkg/pkgtrust"
 )
@@ -488,6 +489,7 @@ func TestAnimationsActiveTab(t *testing.T) {
 		shader string
 		fps    int
 		loop   time.Duration
+		params shaderloop.Params
 		errors []string
 	}{{
 		name:   "absent",
@@ -499,10 +501,79 @@ func TestAnimationsActiveTab(t *testing.T) {
 		name: "configured",
 		src: `config = {"animations": {"KEY": {
     "enabled": True, "shader": "shine", "fps": 12, "loop": "2s",
+    "shine": {"color": "green", "intensity": 0.8, "band_width": 0.4},
 }}}`,
 		shader: "shine",
 		fps:    12,
 		loop:   2 * time.Second,
+		params: shaderloop.Params{Shine: shaderloop.ShineParams{
+			Color: term.ColorGreen, Intensity: 0.8, BandWidth: 0.4,
+		}},
+	}, {
+		name: "every shader keeps its own tuning",
+		src: `config = {"animations": {"KEY": {
+    "shader": "pulse",
+    "pulse": {"color": "red", "intensity": 0.5},
+    "shine": {"color": "green"},
+}}}`,
+		shader: "pulse",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
+		params: shaderloop.Params{
+			Pulse: shaderloop.PulseParams{Color: term.ColorRed, Intensity: 0.5},
+			Shine: shaderloop.ShineParams{Color: term.ColorGreen},
+		},
+	}, {
+		name: "every shader's knobs",
+		src: `config = {"animations": {"KEY": {
+    "blaze":   {"animate_background": True, "color": "green", "swap_red_blue": True},
+    "burn":    {
+        "animate_background": True, "gradient": ["white", "green", 0x003300],
+        "duration": 0.3, "seed": 7, "origin": 0,
+    },
+    "inferno": {"color": "#0000ff", "swap_red_blue": True},
+    "noise":   {"animate_background": True, "speed": 2, "amplitude": 0.5, "scale": 8},
+    "shine":   {"direction": "left_to_right"},
+    "trippy":  {"animate_background": True, "speed": 0.5},
+}}}`,
+		shader: "pulse",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
+		params: shaderloop.Params{
+			Blaze: shaderloop.FireParams{
+				AnimateBackground: true, Color: term.ColorGreen, SwapRedBlue: true,
+			},
+			Burn: shaderloop.BurnParams{
+				AnimateBackground: true,
+				Gradient: []term.Color{
+					term.ColorWhite, term.ColorGreen, term.NewHexColor(0x003300),
+				},
+				Duration: 0.3, Seed: 7, FixedOrigin: true, Origin: 0,
+			},
+			Inferno: shaderloop.FireParams{
+				Color: term.NewRGBColor(0, 0, 255), SwapRedBlue: true,
+			},
+			Noise: shaderloop.NoiseParams{
+				AnimateBackground: true, Speed: 2, Amplitude: 0.5, Scale: 8,
+			},
+			Shine:  shaderloop.ShineParams{Direction: glslshader.DirectionLeftToRight},
+			Trippy: shaderloop.TrippyParams{AnimateBackground: true, Speed: 0.5},
+		},
+	}, {
+		name:   "integer fractions",
+		src:    `config = {"animations": {"KEY": {"shine": {"intensity": 1, "band_width": 1}}}}`,
+		shader: "pulse",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
+		params: shaderloop.Params{Shine: shaderloop.ShineParams{Intensity: 1, BandWidth: 1}},
+	}, {
+		name: "tuning outside a shader's key is ignored",
+		src: `config = {"animations": {"KEY": {
+    "shader": "shine", "color": "green", "intensity": 0.8, "band_width": 0.4,
+}}}`,
+		shader: "shine",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
 	}, {
 		name:   "enabled missing defaults true",
 		src:    `config = {"animations": {"KEY": {"fps": 12}}}`,
@@ -544,16 +615,79 @@ func TestAnimationsActiveTab(t *testing.T) {
 		loop:   shaderloop.DefaultLoop,
 		errors: []string{"animations.KEY.fps", "animations.KEY.loop"},
 	}, {
+		name: "fractions out of range fall back and warn",
+		src: `config = {"animations": {"KEY": {
+    "pulse": {"intensity": 0},
+    "shine": {"intensity": 1.5, "band_width": -0.1},
+}}}`,
+		shader: "pulse",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
+		errors: []string{
+			"animations.KEY.pulse.intensity",
+			"animations.KEY.shine.intensity", "animations.KEY.shine.band_width",
+		},
+	}, {
+		name: "invalid knobs fall back and warn",
+		src: `config = {"animations": {"KEY": {
+    "blaze":   {"animate_background": "yes", "color": ["red"], "swap_red_blue": 1},
+    "burn":    {"gradient": [], "duration": 2, "seed": "lucky", "origin": 1.5},
+    "inferno": {"color": True, "swap_red_blue": "yes"},
+    "noise":   {"speed": 0, "amplitude": -1, "scale": "big"},
+    "shine":   {"direction": "sideways"},
+    "trippy":  {"speed": -2},
+}}}`,
+		shader: "pulse",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
+		params: shaderloop.Params{
+			Shine: shaderloop.ShineParams{Direction: glslshader.DirectionBottomLeftToTopRight},
+		},
+		errors: []string{
+			"animations.KEY.blaze.animate_background", "animations.KEY.blaze.color",
+			"animations.KEY.blaze.swap_red_blue",
+			"animations.KEY.burn.gradient", "animations.KEY.burn.duration",
+			"animations.KEY.burn.seed", "animations.KEY.burn.origin",
+			"animations.KEY.inferno.color", "animations.KEY.inferno.swap_red_blue",
+			"animations.KEY.noise.speed", "animations.KEY.noise.amplitude",
+			"animations.KEY.noise.scale",
+			"animations.KEY.shine.direction",
+			"animations.KEY.trippy.speed",
+		},
+	}, {
+		name: "invalid gradient colours fall back and warn",
+		src: `config = {"animations": {"KEY": {
+    "burn": {"gradient": ["green", ["red"]]},
+}}}`,
+		shader: "pulse",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
+		errors: []string{"animations.KEY.burn.gradient"},
+	}, {
+		name: "None keeps the default",
+		src: `config = {"animations": {"KEY": {
+    "burn":  {"origin": None, "seed": 7},
+    "shine": {"color": None, "direction": None},
+}}}`,
+		shader: "pulse",
+		fps:    shaderloop.DefaultFPS,
+		loop:   shaderloop.DefaultLoop,
+		params: shaderloop.Params{Burn: shaderloop.BurnParams{Seed: 7}},
+	}, {
 		name: "wrong types fall back and warn",
 		src: `config = {"animations": {"KEY": {
     "enabled": "yes", "shader": 42, "fps": "fast", "loop": 1200,
+    "pulse": "red",
+    "shine": {"color": ["green"], "intensity": "bright", "band_width": "wide"},
 }}}`,
 		shader: "pulse",
 		fps:    shaderloop.DefaultFPS,
 		loop:   shaderloop.DefaultLoop,
 		errors: []string{
 			"animations.KEY.enabled", "animations.KEY.shader",
-			"animations.KEY.fps", "animations.KEY.loop",
+			"animations.KEY.fps", "animations.KEY.loop", "animations.KEY.pulse",
+			"animations.KEY.shine.color", "animations.KEY.shine.intensity",
+			"animations.KEY.shine.band_width",
 		},
 	}} {
 		for _, key := range []string{animActiveContentTab, animActiveWorkspaceTab} {
@@ -562,6 +696,7 @@ func TestAnimationsActiveTab(t *testing.T) {
 				assert.Equal(t, tc.shader, c.animationsActiveTabShader(key))
 				assert.Equal(t, tc.fps, c.animationsActiveTabFPS(key))
 				assert.Equal(t, tc.loop, c.animationsActiveTabLoop(key))
+				assert.Equal(t, tc.params, c.animationsActiveTabParams(key))
 				want := make([]string, len(tc.errors))
 				for i, e := range tc.errors {
 					want[i] = strings.ReplaceAll(e, "KEY", key)
