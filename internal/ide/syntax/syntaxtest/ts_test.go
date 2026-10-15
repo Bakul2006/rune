@@ -43,9 +43,12 @@ func TestTypeScriptTreeStateIntegration(t *testing.T) {
 		{langID: "typescript", ext: ".ts", content: tsFileContent},
 		{langID: "tsx", ext: ".tsx", content: tsxFileContent},
 		{langID: "javascript", ext: ".js", content: jsFileContent},
+		{langID: "javascript", ext: ".jsx", content: jsxFileContent},
+		{langID: "javascript", ext: ".mjs", content: mjsFileContent},
+		{langID: "javascript", ext: ".cjs", content: cjsFileContent},
 	}
 	for _, d := range dialects {
-		t.Run(d.langID+" parses its fixture without errors", func(t *testing.T) {
+		t.Run(d.ext+" parses as "+d.langID+" without errors", func(t *testing.T) {
 			tree, cleanup := newTSTree(t, d.langID, d.ext, d.content)
 			defer cleanup()
 			defer func() { require.NoError(t, tree.Close()) }()
@@ -64,19 +67,31 @@ func TestTypeScriptTreeStateIntegration(t *testing.T) {
 		})
 	}
 
-	t.Run("incomplete source reports a parser error", func(t *testing.T) {
-		tree, cleanup := newTSTree(t, "typescript", ".ts", tsIncompleteContent)
-		defer cleanup()
-		defer func() { require.NoError(t, tree.Close()) }()
+	incomplete := []struct {
+		langID  string
+		ext     string
+		content string
+	}{
+		{langID: "typescript", ext: ".ts", content: tsIncompleteContent},
+		{langID: "tsx", ext: ".tsx", content: tsxIncompleteContent},
+		{langID: "javascript", ext: ".js", content: jsIncompleteContent},
+		{langID: "javascript", ext: ".jsx", content: jsxIncompleteContent},
+	}
+	for _, d := range incomplete {
+		t.Run("incomplete "+d.ext+" reports a parser error", func(t *testing.T) {
+			tree, cleanup := newTSTree(t, d.langID, d.ext, d.content)
+			defer cleanup()
+			defer func() { require.NoError(t, tree.Close()) }()
 
-		it := tree.State()
-		defer it.Close()
-		actual, ok := it.Next(context.Background())
-		require.True(t, ok)
-		assert.Equal(t, "typescript", actual.LangID)
-		assert.True(t, actual.Highlights)
-		assert.NotEmpty(t, actual.ParserError)
-	})
+			it := tree.State()
+			defer it.Close()
+			actual, ok := it.Next(context.Background())
+			require.True(t, ok)
+			assert.Equal(t, d.langID, actual.LangID)
+			assert.True(t, actual.Highlights)
+			assert.NotEmpty(t, actual.ParserError)
+		})
+	}
 
 	t.Run("missing folds.scm still streams state with Folds false", func(t *testing.T) {
 		pkgs := newInstalledPkgManagerWithFiles(t,
@@ -215,6 +230,52 @@ func TestTypeScriptTreeQueryIntegration(t *testing.T) {
 			},
 		},
 		{
+			langID: "javascript", ext: ".jsx", content: jsxFileContent,
+			capture: "local.definition.function",
+			want: []treesitter.Match{
+				{LineString: "export function Card({ title, children }) {", Line: 2},
+				{LineString: "export const Badge = ({ label }) => <span>{label}</span>;", Line: 16},
+			},
+		},
+		{
+			langID: "javascript", ext: ".jsx", content: jsxFileContent,
+			capture: "local.definition.method",
+			want: []treesitter.Match{
+				{LineString: "  render() {", Line: 11},
+			},
+		},
+		{
+			langID: "javascript", ext: ".jsx", content: jsxFileContent,
+			capture: "local.definition.type",
+			want: []treesitter.Match{
+				{LineString: "export class Toggle extends ui.Component {", Line: 10},
+			},
+		},
+		{
+			langID: "javascript", ext: ".jsx", content: jsxFileContent,
+			capture: "local.definition.import",
+			want: []treesitter.Match{
+				{LineString: `import * as ui from "./ui";`, Line: 0},
+			},
+		},
+		{
+			langID: "javascript", ext: ".mjs", content: mjsFileContent,
+			capture: "local.definition.function",
+			want: []treesitter.Match{
+				{LineString: "export async function load(path) {", Line: 2},
+			},
+		},
+		{
+			// CommonJS exports are assignments, not declarations.
+			langID: "javascript", ext: ".cjs", content: cjsFileContent,
+			capture: "local.definition.function",
+			want: []treesitter.Match{
+				{LineString: "function normalize(p) {", Line: 2},
+				{LineString: "exports.parse = function (text) {", Line: 6},
+				{LineString: "module.exports.format = (parts) => parts.join(path.sep);", Line: 10},
+			},
+		},
+		{
 			name:   "declarations before a syntax error still resolve",
 			langID: "typescript", ext: ".ts", content: tsIncompleteContent,
 			capture: "local.definition.function",
@@ -222,11 +283,35 @@ func TestTypeScriptTreeQueryIntegration(t *testing.T) {
 				{LineString: "export function add(a: number, b: number): number {", Line: 0},
 			},
 		},
+		{
+			name:   "tsx declarations before a syntax error still resolve",
+			langID: "tsx", ext: ".tsx", content: tsxIncompleteContent,
+			capture: "local.definition.function",
+			want: []treesitter.Match{
+				{LineString: "export function Header() {", Line: 0},
+			},
+		},
+		{
+			name:   "javascript declarations before a syntax error still resolve",
+			langID: "javascript", ext: ".js", content: jsIncompleteContent,
+			capture: "local.definition.function",
+			want: []treesitter.Match{
+				{LineString: "function stable() {", Line: 0},
+			},
+		},
+		{
+			name:   "jsx declarations before a syntax error still resolve",
+			langID: "javascript", ext: ".jsx", content: jsxIncompleteContent,
+			capture: "local.definition.function",
+			want: []treesitter.Match{
+				{LineString: "export const Header = () => <h1>Title</h1>;", Line: 0},
+			},
+		},
 	}
 	for _, c := range cases {
 		name := c.name
 		if name == "" {
-			name = c.langID + " " + c.capture
+			name = c.ext + " " + c.capture
 		}
 		t.Run(name, func(t *testing.T) {
 			tree, cleanup := newTSTree(t, c.langID, c.ext, c.content)
@@ -310,9 +395,18 @@ func TestTypeScriptTreeFoldsIntegration(t *testing.T) {
 				{Start: term.Coordinates{X: 23, Y: 14}, End: term.Coordinates{X: 1, Y: 16}},
 			},
 		},
+		{
+			langID: "javascript", ext: ".jsx", content: jsxFileContent,
+			want: []term.Range{
+				// <ui.Panel> element
+				{Start: term.Coordinates{X: 4, Y: 4}, End: term.Coordinates{X: 15, Y: 6}},
+				// class Toggle body
+				{Start: term.Coordinates{X: 41, Y: 10}, End: term.Coordinates{X: 1, Y: 14}},
+			},
+		},
 	}
 	for _, c := range cases {
-		t.Run(c.langID, func(t *testing.T) {
+		t.Run(c.ext, func(t *testing.T) {
 			tree, cleanup := newTSTree(t, c.langID, c.ext, c.content)
 			defer cleanup()
 			defer func() { require.NoError(t, tree.Close()) }()
@@ -425,6 +519,7 @@ func TestTypeScriptTreeIndentsIntegration(t *testing.T) {
 		{langID: "typescript", name: "incomplete.ts", content: tsIndentIncompleteContent, input: "Go", expected: tsIndentIncompleteFrame},
 		{langID: "tsx", name: "jsx.tsx", content: tsxIndentContent, input: "ggjjo", expected: tsxIndentFrame},
 		{langID: "javascript", name: "object.js", content: jsIndentContent, input: "ggo", expected: jsIndentFrame},
+		{langID: "javascript", name: "incomplete.js", content: tsIndentIncompleteContent, input: "Go", expected: tsIndentIncompleteFrame},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -590,12 +685,74 @@ function render(props) {
 export const shout = (text) => text.toUpperCase();
 `
 
+const jsxFileContent = `import * as ui from "./ui";
+
+export function Card({ title, children }) {
+  return (
+    <ui.Panel title={title}>
+      <>{children}</>
+    </ui.Panel>
+  );
+}
+
+export class Toggle extends ui.Component {
+  render() {
+    return <ui.Button onClick={this.props.onToggle} />;
+  }
+}
+
+export const Badge = ({ label }) => <span>{label}</span>;
+`
+
+const mjsFileContent = `import { readFile } from "node:fs/promises";
+
+export async function load(path) {
+  return JSON.parse(await readFile(path, "utf8"));
+}
+`
+
+const cjsFileContent = `const path = require("node:path");
+
+function normalize(p) {
+  return path.normalize(p);
+}
+
+exports.parse = function (text) {
+  return text.split(path.sep);
+};
+
+module.exports.format = (parts) => parts.join(path.sep);
+`
+
 const tsIncompleteContent = `export function add(a: number, b: number): number {
   return a + b;
 }
 
 export function sub(a: number, b: number): number {
   return a -
+`
+
+const tsxIncompleteContent = `export function Header() {
+  return <h1>Title</h1>;
+}
+
+export function Body() {
+  return (
+    <div>
+`
+
+const jsIncompleteContent = `function stable() {
+  return 1;
+}
+
+function broken(a, b) {
+  return a +
+`
+
+const jsxIncompleteContent = `export const Header = () => <h1>Title</h1>;
+
+export function Body() {
+  return <div className=
 `
 
 const tsHighlightContent = `interface Shape {

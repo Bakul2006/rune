@@ -59,6 +59,12 @@ func TestResolveTypeScriptE2E(t *testing.T) {
 	loaderURI := env.fileURI("src/legacy/loader.cjs")
 	legacyIndexURI := env.fileURI("src/legacy/index.js")
 	widgetURI := env.fileURI("src/legacy/Widget.jsx")
+	controlsURI := env.fileURI("src/legacy/controls.jsx")
+	pageURI := env.fileURI("src/legacy/Page.jsx")
+	codecURI := env.fileURI("src/legacy/codec.cjs")
+	jsBrokenURI := env.fileURI("src/legacy/broken.js")
+	toolbarURI := env.fileURI("src/components/Toolbar.tsx")
+	tsxBrokenURI := env.fileURI("src/components/Broken.tsx")
 
 	tests := []struct {
 		name            string
@@ -289,6 +295,24 @@ func TestResolveTypeScriptE2E(t *testing.T) {
 			wantErrContains: "no symbols found",
 		},
 		{
+			name:     "tsx member tag resolves to call site",
+			spec:     symbolresolve.TSX,
+			symbol:   "ui.Panel",
+			wantURIs: []string{toolbarURI},
+		},
+		{
+			name:     "tsx self-closing member tag resolves to call site",
+			spec:     symbolresolve.TSX,
+			symbol:   "ui.Button",
+			wantURIs: []string{toolbarURI},
+		},
+		{
+			name:     "tsx declaration before a syntax error still resolves",
+			spec:     symbolresolve.TSX,
+			symbol:   "Broken.Stable",
+			wantURIs: []string{tsxBrokenURI},
+		},
+		{
 			name:     "javascript namespace import member resolves to call site",
 			spec:     symbolresolve.JavaScript,
 			symbol:   "requests.get",
@@ -330,6 +354,38 @@ func TestResolveTypeScriptE2E(t *testing.T) {
 			spec:     symbolresolve.JavaScript,
 			symbol:   "Widget.Widget",
 			wantURIs: []string{widgetURI},
+		},
+		{
+			name:     "jsx member tag resolves to call site",
+			spec:     symbolresolve.JavaScript,
+			symbol:   "ui.Button",
+			wantURIs: []string{pageURI},
+		},
+		{
+			name:     "jsx arrow component resolves via module stem",
+			spec:     symbolresolve.JavaScript,
+			symbol:   "controls.Panel",
+			wantURIs: []string{controlsURI},
+		},
+		{
+			name:     "commonjs exports function resolves via module stem",
+			spec:     symbolresolve.JavaScript,
+			symbol:   "codec.parse",
+			wantURIs: []string{codecURI},
+		},
+		{
+			name:     "commonjs module.exports arrow resolves via module stem",
+			spec:     symbolresolve.JavaScript,
+			symbol:   "codec.format",
+			wantURIs: []string{codecURI},
+		},
+		{
+			// broken.ts shares the module name, but belongs to the
+			// typescript spec.
+			name:     "javascript declaration before a syntax error still resolves",
+			spec:     symbolresolve.JavaScript,
+			symbol:   "broken.stable",
+			wantURIs: []string{jsBrokenURI},
 		},
 		{
 			name:            "missing symbol returns not-found",
@@ -391,13 +447,17 @@ func TestListReferencesTypeScriptE2E(t *testing.T) {
 		"geometry.perimeter", "geometry.Shape.scale", "types.configure",
 		"utils.slugify", "utils.loadConfig", "utils.describe",
 		"Badge.Badge", "Badge.Panel.render", "legacy.fetch", "Widget.Widget",
+		"ui.Button", "ui.Panel", "controls.Button", "codec.parse", "codec.format",
+		"broken.stable", "Broken.Stable", "Toolbar.Toolbar", "Page.Page",
 	} {
 		assert.Truef(t, got[name], "expected %q to be listed", name)
 	}
 
 	// Member reads on values that no import binds are not module
 	// references.
-	for _, name := range []string{"console.log", "shape.size", "urls.map"} {
+	for _, name := range []string{
+		"console.log", "shape.size", "urls.map", "exports.parse", "module.exports",
+	} {
 		assert.Falsef(t, got[name], "%q must not be listed", name)
 	}
 	assert.False(t, got["utils.load"], "an aliased re-export must not list its source name")

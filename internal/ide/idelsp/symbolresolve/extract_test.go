@@ -423,4 +423,48 @@ func TestExtractFileTypeScript(t *testing.T) {
 			{"loader.load", symbolresolve.SymbolDef}:       1,
 		}, occs, "module.exports must not pass RequireImport")
 	})
+
+	t.Run("commonjs export assignments are defs in codec.cjs", func(t *testing.T) {
+		ext, occs := extractFileT(t, env, symbolresolve.JavaScript, "src/legacy/codec.cjs")
+
+		assert.Empty(t, ext.Imports)
+		assert.Equal(t, map[occurrence]int{
+			{"codec.parse", symbolresolve.SymbolDef}:  1,
+			{"codec.format", symbolresolve.SymbolDef}: 1,
+		}, occs, "exports and module.exports must not pass RequireImport")
+	})
+
+	t.Run("jsx member tag is a ref in Page.jsx", func(t *testing.T) {
+		ext, occs := extractFileT(t, env, symbolresolve.JavaScript, "src/legacy/Page.jsx")
+
+		assert.Equal(t, map[string]string{"ui": "./controls.jsx"}, ext.Imports)
+		assert.Equal(t, map[occurrence]int{
+			{"ui.Button", symbolresolve.SymbolRef}: 1,
+			{"Page.Page", symbolresolve.SymbolDef}: 1,
+		}, occs)
+	})
+
+	t.Run("tsx member tags are refs in Toolbar.tsx", func(t *testing.T) {
+		ext, occs := extractFileT(t, env, symbolresolve.TSX, "src/components/Toolbar.tsx")
+
+		assert.Equal(t, map[string]string{"ui": "../legacy/controls.jsx"}, ext.Imports)
+		// The opening and closing tags each name ui.Panel.
+		assert.Equal(t, map[occurrence]int{
+			{"ui.Panel", symbolresolve.SymbolRef}:        2,
+			{"ui.Button", symbolresolve.SymbolRef}:       1,
+			{"Toolbar.Toolbar", symbolresolve.SymbolDef}: 1,
+		}, occs)
+	})
+
+	t.Run("declaration before a syntax error in broken.js", func(t *testing.T) {
+		_, occs := extractFileT(t, env, symbolresolve.JavaScript, "src/legacy/broken.js")
+
+		assert.Equal(t, 1, occs[occurrence{"broken.stable", symbolresolve.SymbolDef}])
+	})
+
+	t.Run("declaration before a syntax error in Broken.tsx", func(t *testing.T) {
+		_, occs := extractFileT(t, env, symbolresolve.TSX, "src/components/Broken.tsx")
+
+		assert.Equal(t, 1, occs[occurrence{"Broken.Stable", symbolresolve.SymbolDef}])
+	})
 }
