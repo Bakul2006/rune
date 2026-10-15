@@ -107,12 +107,12 @@ third-party extensions straight from a **public git repository** by its ID:
 
 | Command | What it does |
 | --- | --- |
-| `pkg install [--lang] <package> [<version>]` | Install a package by name from Rune's distribution, or a git-hosted extension by its `<host>/<owner>/<repo>` ID (GitHub, GitLab, Bitbucket, or a self-hosted server). With no version, installs or updates to the latest; a git package also accepts a tag or commit SHA as the version. Any executables it ships are added to your `PATH` for terminal sessions, and become usable immediately, with no separate `use` step. `--lang` lists and installs language (runtime) packages, which are otherwise hidden from completion. |
+| `pkg install [--lang] <package> [<version>]` | Install a package by name from Rune's distribution, or a git-hosted extension by its `<host>/<owner>/<repo>` ID (GitHub, GitLab, Bitbucket, or a self-hosted server). With no version, installs or updates to the latest; a git package also accepts a tag or commit SHA as the version. Any executables it ships are added to your `PATH` for terminal sessions, and become usable immediately, with no separate `use` step. Packages it requires are installed or upgraded to their latest version first, and listed in the output. `--lang` lists and installs language (runtime) packages, which are otherwise hidden from completion. |
 | `pkg remove <package> [<version>]` | Remove a package. With a version, removes only that version; otherwise removes all versions. |
 | `pkg use <package> <version>` | Switch to an installed version (downloading it first if needed). |
 | `pkg current <package>` | Print the version currently in use. |
 | `pkg describe <package> [<version>]` | Show a package's notes and the notes for a release version in formatted markdown. With no version, describes the latest. |
-| `pkg update-all` | Upgrade all installed packages to the latest version. |
+| `pkg update-all` | Upgrade all installed packages to the latest version. Packages they require are installed or upgraded too, and listed under the package that required them. |
 | `pkg update-check` | Check for available updates across installed packages. |
 
 For example, to install Rune's agent and its command-line companion:

@@ -53,10 +53,58 @@ func (h *Handler) handleInstall(
 			return nil, fmt.Errorf("install package: %w", err)
 		}
 	}
-	if err := h.mgr.InstallPackageVersion(ctx, pkgID, version, pw); err != nil {
+	rec := newRequirementRecorder(pw)
+	if err := h.mgr.InstallPackageVersion(ctx, pkgID, version, rec); err != nil {
 		return nil, err
 	}
-	return markdownOutput(fmt.Sprintf("Installed **%s@%s**", pkgID, version)), nil
+	var b strings.Builder
+	fmt.Fprintf(&b, "Installed **%s@%s**\n", pkgID, version)
+	changes := rec.recorded()
+	if len(changes) > 0 {
+		b.WriteString("\n")
+	}
+	for _, c := range changes {
+		fmt.Fprintf(&b, "- %s\n", requirementMarkdown(c))
+	}
+	return markdownOutput(b.String()), nil
+}
+
+// requirementRecorder is the progress writer of an install that
+// collects its requirement changes for the command output.
+type requirementRecorder struct {
+	repl.ProgressWriter
+	mu      sync.Mutex
+	changes []idepkg.RequirementChange
+}
+
+var _ idepkg.RequirementReporter = (*requirementRecorder)(nil)
+
+func newRequirementRecorder(pw repl.ProgressWriter) *requirementRecorder {
+	if pw == nil {
+		pw = repl.NopProgressWriter()
+	}
+	return &requirementRecorder{ProgressWriter: pw}
+}
+
+func (r *requirementRecorder) ReportRequirement(c idepkg.RequirementChange) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.changes = append(r.changes, c)
+}
+
+func (r *requirementRecorder) recorded() []idepkg.RequirementChange {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]idepkg.RequirementChange(nil), r.changes...)
+}
+
+func requirementMarkdown(c idepkg.RequirementChange) string {
+	if c.From == "" {
+		return fmt.Sprintf("Installed **%s@%s** (required by %s)",
+			c.Package, c.To, c.RequiredBy)
+	}
+	return fmt.Sprintf("Upgraded **%s** from %s to %s (required by %s)",
+		c.Package, c.From, c.To, c.RequiredBy)
 }
 
 func (h *Handler) handleRemove(
@@ -200,11 +248,12 @@ func (h *Handler) handleUpdateAll(
 	}
 
 	type result struct {
-		pkg     string
-		inUse   release.Version
-		latest  release.Version
-		updated bool
-		err     error
+		pkg          string
+		inUse        release.Version
+		latest       release.Version
+		updated      bool
+		err          error
+		requirements []idepkg.RequirementChange
 	}
 	results := make([]result, len(packages))
 	parallel := func(n int, fn func(i int)) {
@@ -250,16 +299,34 @@ func (h *Handler) handleUpdateAll(
 		}
 	}
 	progress := newUpdateProgress(pw, len(stale))
+	installErrs := make([]error, len(stale))
 	parallel(len(stale), func(i int) {
 		r := stale[i]
 		defer progress.finish(i)
-		err := h.mgr.InstallPackageVersion(ctx, r.pkg, r.latest, progress.install(i))
-		if err != nil {
-			r.err = fmt.Errorf("update package version: %w", err)
-			return
-		}
-		r.updated = true
+		rec := newRequirementRecorder(progress.install(i))
+		installErrs[i] = h.mgr.InstallPackageVersion(ctx, r.pkg, r.latest, rec)
+		r.requirements = rec.recorded()
 	})
+	// The update of a package requiring another can upgrade it before or
+	// while the other's own update runs, which then returns
+	// ErrAlreadyInstalled or nil without upgrading it. Whether a package
+	// is up to date is only known once every update returned.
+	for i, r := range stale {
+		err := installErrs[i]
+		if err == nil || errors.Is(err, idepkg.ErrAlreadyInstalled) {
+			inUse, _, inUseErr := h.mgr.PackageVersionInUse(ctx, r.pkg)
+			switch {
+			case inUseErr != nil:
+				err = inUseErr
+			case inUse == r.latest:
+				r.updated = true
+				continue
+			case err == nil:
+				err = fmt.Errorf("%s is still at %s", r.pkg, inUse)
+			}
+		}
+		r.err = fmt.Errorf("update package version: %w", err)
+	}
 
 	var b strings.Builder
 	b.WriteString("## Package updates\n\n")
@@ -271,6 +338,9 @@ func (h *Handler) handleUpdateAll(
 			ret = multierror.Append(ret, r.err)
 		case r.updated:
 			fmt.Fprintf(&b, "- **%s**: updated to %s\n", r.pkg, r.latest)
+			for _, c := range r.requirements {
+				fmt.Fprintf(&b, "  - %s\n", requirementMarkdown(c))
+			}
 		default:
 			fmt.Fprintf(&b, "- **%s**: already at latest version (%s)\n", r.pkg, r.latest)
 		}

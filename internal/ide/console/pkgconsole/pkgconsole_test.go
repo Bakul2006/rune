@@ -18,12 +18,16 @@ package pkgconsole
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,6 +42,7 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/iterator"
 	"github.com/unstablebuild/rune-go-sdk/term"
 	"github.com/unstablebuild/rune-go-sdk/tui"
+	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/idepkg"
 	"unstable.build/rune/internal/ide/idepkg/idepkgtest"
 	"unstable.build/rune/internal/ide/idepkg/pkgrpc"
@@ -93,7 +98,7 @@ var syncTick = func(fn func()) bool { fn(); return true }
 // newManager builds an idepkg.Manager backed by the given mocks, rooted
 // at a temp directory, auto-approving install prompts.
 func newManager(
-	t *testing.T, n *idepkgtest.Notifications, rm *idepkgtest.ReleaseManager,
+	t *testing.T, n *idepkgtest.Notifications, rm release.Manager,
 ) *idepkg.Manager {
 	t.Helper()
 	temp := t.TempDir()
@@ -423,6 +428,15 @@ type hostPackageManager struct {
 	latest    release.Version
 	inUse     map[string]release.Version
 	installed []string
+	// requirements are the requirement changes the install of a package
+	// makes and reports.
+	requirements map[string][]idepkg.RequirementChange
+	// upgradedElsewhere holds what the install of a package returns,
+	// without changing it, when the install of a package requiring it
+	// upgrades it instead: idepkg.ErrAlreadyInstalled when that install
+	// already did, and nil while it is in flight.
+	upgradedElsewhere map[string]error
+	failures          map[string]error
 }
 
 func (f *hostPackageManager) LatestVersion(context.Context, string) (release.Version, error) {
@@ -434,10 +448,22 @@ func (f *hostPackageManager) InstallPackageVersion(
 ) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err, ok := f.upgradedElsewhere[pkgID]; ok {
+		return err
+	}
+	if err, ok := f.failures[pkgID]; ok {
+		return err
+	}
 	// Mirrors idepkg.Manager: each install restarts its phases at zero.
 	pw.Progress(1, 4, "MiB downloaded")
 	pw.Progress(3, 4, "MiB downloaded")
 	pw.Progress(1, 2, "MiB extracted")
+	for _, c := range f.requirements[pkgID] {
+		f.inUse[c.Package] = c.To
+		if r, ok := pw.(idepkg.RequirementReporter); ok {
+			r.ReportRequirement(c)
+		}
+	}
 	pw.Progress(1, 1, "done")
 	f.inUse[pkgID] = version
 	f.installed = append(f.installed, pkgID)
@@ -525,6 +551,359 @@ func TestUpdateAllAggregatesProgress(t *testing.T) {
 			"progress went backwards at %d: %v", i, samples)
 	}
 	assert.Equal(t, progressSample{100, 100, "(2/2 packages)"}, samples[len(samples)-1])
+}
+
+func TestInstallPrintsRequirementChanges(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		changes []idepkg.RequirementChange
+		want    []string
+	}{
+		{
+			name: "none",
+			want: []string{"Installed typescript@2"},
+		},
+		{
+			name: "installed",
+			changes: []idepkg.RequirementChange{
+				{Package: "javascript", To: "2", RequiredBy: "typescript"},
+			},
+			want: []string{
+				"Installed typescript@2",
+				"Installed javascript@2 (required by typescript)",
+			},
+		},
+		{
+			name: "upgraded",
+			changes: []idepkg.RequirementChange{
+				{Package: "tsx", From: "1", To: "2", RequiredBy: "typescript"},
+			},
+			want: []string{
+				"Installed typescript@2",
+				"Upgraded tsx from 1 to 2 (required by typescript)",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pm := &hostPackageManager{
+				latest: "2",
+				inUse:  map[string]release.Version{},
+				requirements: map[string][]idepkg.RequirementChange{
+					"typescript": tt.changes,
+				},
+			}
+			h := New(Config{Manager: pm})
+			ctx := context.Background()
+			it, err := h.HandleCommand(ctx, repl.Command{
+				Name: CommandName, Args: []string{"install", "typescript"},
+			}, &recordingProgressWriter{})
+			require.NoError(t, err)
+			out, err := iterator.ToSlice(ctx, it)
+			require.NoError(t, err)
+			require.Len(t, out, 1)
+			text := renderText(t, out[0])
+			for _, want := range tt.want {
+				assert.Contains(t, text, want)
+			}
+			if len(tt.changes) == 0 {
+				assert.NotContains(t, text, "required by")
+			}
+		})
+	}
+}
+
+func TestUpdateAllPrintsRequirementChanges(t *testing.T) {
+	t.Parallel()
+	upgraded := []string{
+		"typescript: updated to 2",
+		"Upgraded tsx from 1 to 2 (required by typescript)",
+		"tsx: updated to 2",
+	}
+	tests := []struct {
+		name          string
+		tsxResult     error
+		typescriptErr error
+		want          []string
+		wantErr       bool
+	}{
+		{
+			name:      "typescript's update upgraded tsx before tsx's own",
+			tsxResult: fmt.Errorf("version 2 of package tsx: %w", idepkg.ErrAlreadyInstalled),
+			want:      upgraded,
+		},
+		{
+			name: "tsx's own update returned while typescript's was upgrading tsx",
+			want: upgraded,
+		},
+		{
+			name:          "typescript's update failed to upgrade tsx",
+			typescriptErr: errors.New("download failed"),
+			want: []string{
+				"typescript: error: update package version: download failed",
+				"tsx: error: update package version: tsx is still at 1",
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pm := &hostPackageManager{
+				latest:    "2",
+				inUse:     map[string]release.Version{"typescript": "1", "tsx": "1"},
+				installed: []string{"typescript", "tsx"},
+				requirements: map[string][]idepkg.RequirementChange{
+					"typescript": {{Package: "tsx", From: "1", To: "2", RequiredBy: "typescript"}},
+				},
+				upgradedElsewhere: map[string]error{"tsx": tt.tsxResult},
+				failures:          map[string]error{},
+			}
+			if tt.typescriptErr != nil {
+				pm.failures["typescript"] = tt.typescriptErr
+			}
+			h := New(Config{Manager: pm})
+			ctx := context.Background()
+
+			it, err := h.HandleCommand(ctx,
+				repl.Command{Name: CommandName, Args: []string{"update-all"}},
+				&recordingProgressWriter{})
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			out, err := iterator.ToSlice(ctx, it)
+			require.NoError(t, err)
+			require.Len(t, out, 1)
+			text := renderText(t, out[0])
+			for _, want := range tt.want {
+				assert.Contains(t, text, want)
+			}
+			if !tt.wantErr {
+				assert.NotContains(t, text, "error")
+			}
+		})
+	}
+}
+
+func TestInstallPackagesRequiringEachOther(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		requirements map[string][]string
+		want         []string
+	}{
+		{
+			name:         "two packages",
+			requirements: map[string][]string{"a": {"b"}, "b": {"a"}},
+			want:         []string{"Installed a@1", "Installed b@1 (required by a)"},
+		},
+		{
+			name:         "three packages",
+			requirements: map[string][]string{"a": {"b"}, "b": {"c"}, "c": {"a"}},
+			want: []string{
+				"Installed a@1",
+				"Installed c@1 (required by b)",
+				"Installed b@1 (required by a)",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			versions := make(map[string][]release.Version)
+			for pkgID := range tt.requirements {
+				versions[pkgID] = []release.Version{"1"}
+			}
+			rm := releaseServer(versions)
+			setRequirements(t, rm, tt.requirements)
+			n := idepkgtest.NewNotifications(t)
+			m := newManager(t, n, rm)
+
+			r := awaitPkgCommand(t, startPkgCommand(New(Config{Manager: m}), "install", "a"))
+			require.NoError(t, r.err)
+			n.RequireNoErrorNotification()
+
+			assertRequirementLines(t, outputText(t, r.it), tt.want)
+			for pkgID := range tt.requirements {
+				assertInUse(t, m, pkgID, "1")
+			}
+		})
+	}
+}
+
+func TestUpdateAllPackagesRequiringEachOther(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		// installed are installed at version 1, and require these
+		// packages from version 2 on.
+		installed map[string][]string
+		// added are not installed, and publish version 2 only.
+		added map[string][]string
+		want  []string
+	}{
+		{
+			name:      "two updates requiring each other",
+			installed: map[string][]string{"a": {"b"}, "b": {"a"}},
+			want:      []string{"a: updated to 2", "b: updated to 2"},
+		},
+		{
+			name:      "three updates in a cycle",
+			installed: map[string][]string{"a": {"b"}, "b": {"c"}, "c": {"a"}},
+			want:      []string{"a: updated to 2", "b: updated to 2", "c: updated to 2"},
+		},
+		{
+			name:      "two updates sharing a requirement that updates too",
+			installed: map[string][]string{"a": {"c"}, "b": {"c"}, "c": nil},
+			want:      []string{"a: updated to 2", "b: updated to 2", "c: updated to 2"},
+		},
+		{
+			name:      "an update requiring a new package that requires it back",
+			installed: map[string][]string{"a": {"d"}},
+			added:     map[string][]string{"d": {"a"}},
+			want:      []string{"a: updated to 2", "Installed d@2 (required by a)"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			versions := make(map[string][]release.Version)
+			var held []idepkgtest.Download
+			for pkgID := range tt.installed {
+				versions[pkgID] = []release.Version{"1", "2"}
+				held = append(held, idepkgtest.Download{Package: pkgID, Version: "2"})
+			}
+			for pkgID := range tt.added {
+				versions[pkgID] = []release.Version{"2"}
+			}
+			rm := releaseServer(versions)
+			hrm := idepkgtest.NewHeldReleaseManager(rm, held...)
+			n := idepkgtest.NewNotifications(t)
+			m := newManager(t, n, hrm)
+			for pkgID := range tt.installed {
+				setRequirements(t, rm, map[string][]string{pkgID: nil})
+				require.NoError(t, m.InstallPackageVersion(context.Background(), pkgID, "1", nil))
+			}
+			setRequirements(t, rm, tt.installed)
+			setRequirements(t, rm, tt.added)
+
+			done := startPkgCommand(New(Config{Manager: m}), "update-all")
+			// Every update is in flight before any of them reads its
+			// requirements.
+			for _, d := range held {
+				hrm.AwaitStarted(t, d)
+			}
+			for _, d := range held {
+				hrm.Release(d, nil)
+			}
+			r := awaitPkgCommand(t, done)
+			require.NoError(t, r.err)
+			n.RequireNoErrorNotification()
+
+			assertRequirementLines(t, outputText(t, r.it), tt.want)
+			for pkgID := range tt.installed {
+				assertInUse(t, m, pkgID, "2")
+			}
+			for pkgID := range tt.added {
+				assertInUse(t, m, pkgID, "2")
+			}
+		})
+	}
+}
+
+// releaseServer returns a release server publishing each package at its
+// versions, the last of them as its latest.
+func releaseServer(versions map[string][]release.Version) *idepkgtest.ReleaseManager {
+	var pkgs []release.Package
+	var bundles [][]release.Bundle
+	for pkgID, vs := range versions {
+		pkgs = append(pkgs, release.Package{Name: pkgID, Latest: vs[len(vs)-1]})
+		bs := make([]release.Bundle, len(vs))
+		for i, v := range vs {
+			bs[i] = release.Bundle{Package: pkgID, Version: v}
+		}
+		bundles = append(bundles, bs)
+	}
+	return idepkgtest.NewReleaseManager(
+		idepkgtest.MakePackages(pkgs...), idepkgtest.MakeBundles(bundles...))
+}
+
+// setRequirements makes rm serve every version of each package of
+// requirements requiring its requirements.
+func setRequirements(
+	t *testing.T, rm *idepkgtest.ReleaseManager, requirements map[string][]string,
+) {
+	t.Helper()
+	for pkgID, reqs := range requirements {
+		files := map[string]string{"lib/" + pkgID + ".txt": pkgID + "\n"}
+		if len(reqs) > 0 {
+			files["config.yaml"] = "requirements:\n  - " + strings.Join(reqs, "\n  - ") + "\n"
+		}
+		rm.SetTarball(pkgID, idepkgtest.MakeTarball(t, files))
+	}
+}
+
+type commandResult struct {
+	it  iterator.Iterator[component.Responsive]
+	err error
+}
+
+func startPkgCommand(h *Handler, args ...string) <-chan commandResult {
+	done := make(chan commandResult, 1)
+	go debug.CapturePanicReport(func() {
+		it, err := h.HandleCommand(context.Background(),
+			repl.Command{Name: CommandName, Args: args}, &recordingProgressWriter{})
+		done <- commandResult{it, err}
+	})
+	return done
+}
+
+func awaitPkgCommand(t *testing.T, done <-chan commandResult) commandResult {
+	t.Helper()
+	select {
+	case r := <-done:
+		return r
+	case <-time.After(10 * time.Second):
+		t.Fatal("the command did not end")
+		return commandResult{}
+	}
+}
+
+// outputText renders the one component a command outputs.
+func outputText(t *testing.T, it iterator.Iterator[component.Responsive]) string {
+	t.Helper()
+	out, err := iterator.ToSlice(context.Background(), it)
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	return renderText(t, out[0])
+}
+
+// assertRequirementLines asserts text holds each of want, and lists no
+// requirement change want does not.
+func assertRequirementLines(t *testing.T, text string, want []string) {
+	t.Helper()
+	var changes int
+	for _, w := range want {
+		assert.Contains(t, text, w)
+		if strings.Contains(w, "required by") {
+			changes++
+		}
+	}
+	assert.Equal(t, changes, strings.Count(text, "required by"), text)
+	assert.NotContains(t, text, "error")
+}
+
+func assertInUse(t *testing.T, m idepkg.PackageManager, pkgID string, want release.Version) {
+	t.Helper()
+	got, ok, err := m.PackageVersionInUse(context.Background(), pkgID)
+	require.NoError(t, err)
+	if assert.True(t, ok, "%s must be in use", pkgID) {
+		assert.Equal(t, want, got, pkgID)
+	}
 }
 
 // oldHost runs a Rune that does not serve package management.

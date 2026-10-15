@@ -368,6 +368,69 @@ func TestInstallEventsKeepTheirOrder(t *testing.T) {
 	assert.Len(t, events.recorded(), 5)
 }
 
+type reportingProgressWriter struct {
+	repl.ProgressWriter
+	mu      sync.Mutex
+	changes []idepkg.RequirementChange
+}
+
+func (w *reportingProgressWriter) ReportRequirement(c idepkg.RequirementChange) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.changes = append(w.changes, c)
+}
+
+func (w *reportingProgressWriter) reported() []idepkg.RequirementChange {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]idepkg.RequirementChange(nil), w.changes...)
+}
+
+func TestInstallRelaysRequirementChanges(t *testing.T) {
+	t.Parallel()
+	change := idepkg.RequirementChange{
+		Package: "go", From: "1", To: "2", RequiredBy: "gopls",
+	}
+	tests := []struct {
+		name         string
+		reporter     bool
+		wantReported []idepkg.RequirementChange
+		wantEvents   []string
+	}{
+		{
+			name:         "a reporting writer receives the change",
+			reporter:     true,
+			wantReported: []idepkg.RequirementChange{change},
+		},
+		{
+			name: "without a reporter the change is a notification",
+			wantEvents: []string{
+				fmt.Sprintf("notify %d Upgraded go from 1 to 2, required by gopls.",
+					browserapi.LevelInfo),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			c, events := serve(t, &fakePackageManager{
+				install: func(_ context.Context, _ string, _ release.Version, pw repl.ProgressWriter) error {
+					pw.(idepkg.RequirementReporter).ReportRequirement(change)
+					return nil
+				},
+			})
+			reporter := &reportingProgressWriter{ProgressWriter: repl.NopProgressWriter()}
+			var pw repl.ProgressWriter
+			if tt.reporter {
+				pw = reporter
+			}
+			require.NoError(t, c.InstallPackageVersion(context.Background(), "gopls", "1", pw))
+			assert.Equal(t, tt.wantReported, reporter.reported())
+			assert.Equal(t, tt.wantEvents, events.recorded())
+		})
+	}
+}
+
 // hostGOROOT reads the GOROOT the host's user config sets.
 func hostGOROOT(t *testing.T, dataDir string) string {
 	t.Helper()

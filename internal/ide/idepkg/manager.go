@@ -91,6 +91,10 @@ var (
 	ErrNoReleases = errors.New("package has no releases")
 )
 
+// errInstallInFlight is returned by install for an install of the
+// package in flight that it does not wait for.
+var errInstallInFlight = errors.New("an install of the package is in flight")
+
 // translatePackageErr maps a *cdnrelease.StatusError on a
 // package-scoped call into a user-facing wrapped sentinel. Errors
 // without a recognisable status (network errors, non-StatusError
@@ -190,7 +194,8 @@ func NewManager(
 		storage:          storage,
 		trust:            trust,
 	}
-	ret.iterators.m = make(map[string]*sync.Mutex)
+	ret.iterators.m = make(map[string]*inFlightInstall)
+	ret.iterators.waiting = make(map[*installTree]*installTree)
 	for _, opt := range opts {
 		opt(ret)
 	}
@@ -229,10 +234,32 @@ type Manager struct {
 	// written to the user config file. See WithAfterConfigMerge.
 	afterConfigMerge func(ConfigMergeEvent) (ConfigMergeResult, error)
 
+	// iterators gates the installs of each package. m holds the install
+	// in flight of each package, and waiting holds, for each install
+	// tree waiting for one of them, the tree that install belongs to.
 	iterators struct {
 		sync.Mutex
-		m map[string]*sync.Mutex
+		m       map[string]*inFlightInstall
+		waiting map[*installTree]*installTree
 	}
+}
+
+// installTree is an install that was not asked for by another install,
+// together with the requirement installs it makes, one at a time.
+type installTree struct {
+	// pkgID is the package of the first install. A non-zero size also
+	// keeps distinct trees at distinct addresses.
+	pkgID string
+}
+
+type installTreeKey struct{}
+
+// inFlightInstall is an install of a package that has not ended. ready
+// is held, and done open, until it does.
+type inFlightInstall struct {
+	ready *sync.Mutex
+	done  chan struct{}
+	tree  *installTree
 }
 
 // LibDir returns an iterator to the lib directory of the given package.
@@ -242,9 +269,9 @@ func (m *Manager) LibDir(ctx context.Context, pkgID string) (iterator.Iterator[s
 	defer m.iterators.Unlock()
 
 	libDir := makePackageLibDirname(m.dataDir, pkgID)
-	ready, ok := m.iterators.m[pkgID]
+	f, ok := m.iterators.m[pkgID]
 	if ok {
-		return newPendingIterator(ready, m.scheme, m.schemeURI, libDir), nil
+		return newPendingIterator(f.ready, m.scheme, m.schemeURI, libDir), nil
 	}
 
 	_, err := os.Stat(libDir)
@@ -357,37 +384,67 @@ func (m *Manager) LatestVersion(ctx context.Context, pkgID string) (release.Vers
 // InstallPackageVersion downloads and installs a package bundle by name
 // and version, reporting progress via the ProgressWriter. It blocks
 // until the install finishes and returns the first error encountered, so
-// callers can report success or failure directly.
+// callers can report success or failure directly. While another install
+// of pkgID is in flight, it returns nil without waiting for it.
 func (m *Manager) InstallPackageVersion(
 	ctx context.Context, pkgID string, version release.Version,
 	pw repl.ProgressWriter,
 ) error {
+	_, err := m.install(ctx, pkgID, version, pw)
+	if errors.Is(err, errInstallInFlight) {
+		return nil
+	}
+	return err
+}
+
+// install is InstallPackageVersion returning the version that was in use
+// before, empty when none was. A requirement install, made by another
+// install, waits for an install of pkgID in flight to end and tries
+// again, unless that install waits for this one, directly or through
+// others. It then returns errInstallInFlight, as any install does for an
+// install of pkgID in flight.
+func (m *Manager) install(
+	ctx context.Context, pkgID string, version release.Version,
+	pw repl.ProgressWriter,
+) (release.Version, error) {
 	if pkgID == "" || version == "" {
-		return errors.New("package and version must not be empty")
+		return "", errors.New("package and version must not be empty")
 	}
 	if pw == nil {
 		pw = repl.NopProgressWriter()
 	}
 
 	if err := validatePkgPath(pkgID); err != nil {
-		return fmt.Errorf("package id: %w", err)
+		return "", fmt.Errorf("package id: %w", err)
 	}
 	if err := validatePkgPath(string(version)); err != nil {
-		return fmt.Errorf("release version: %w", err)
+		return "", fmt.Errorf("release version: %w", err)
 	}
 
+	tree, nested := ctx.Value(installTreeKey{}).(*installTree)
 	m.iterators.Lock()
-	_, ok := m.iterators.m[pkgID]
-	if ok {
-		m.log(log.InfoLevel, "there's already an ongoing install of package: %s", pkgID)
+	for {
+		f, ok := m.iterators.m[pkgID]
+		if !ok {
+			break
+		}
+		if !nested || m.closesWaitCycleLocked(tree, f.tree) {
+			m.log(log.InfoLevel, "there's already an ongoing install of package: %s", pkgID)
+			m.iterators.Unlock()
+			return "", errInstallInFlight
+		}
+		m.log(log.InfoLevel, "waiting for the ongoing install of package %s", pkgID)
+		m.iterators.waiting[tree] = f.tree
 		m.iterators.Unlock()
-		return nil
+		<-f.done
+		m.iterators.Lock()
+		delete(m.iterators.waiting, tree)
 	}
 
 	tarfile, err := os.CreateTemp("", "")
 	if err != nil {
 		m.iterators.Unlock()
-		return fmt.Errorf("create temp: %w", err)
+		return "", fmt.Errorf("create temp: %w", err)
 	}
 
 	key := m.makeDownloadKey(pkgID, version)
@@ -404,23 +461,42 @@ func (m *Manager) InstallPackageVersion(
 			if err != nil {
 				m.cleanupFile(tarfile)
 				m.iterators.Unlock()
-				return fmt.Errorf("version %s of package %s has "+
+				return "", fmt.Errorf("version %s of package %s has "+
 					"already been installed: %w", version, pkgID,
 					ErrAlreadyInstalled)
 			}
 		} else {
 			m.cleanupFile(tarfile)
 			m.iterators.Unlock()
-			return fmt.Errorf("store package version: %w", err)
+			return "", fmt.Errorf("store package version: %w", err)
 		}
 	}
 
-	mu := new(sync.Mutex)
-	m.iterators.m[pkgID] = mu
-	mu.Lock() // block calls to iterator
+	if !nested {
+		tree = &installTree{pkgID: pkgID}
+		ctx = context.WithValue(ctx, installTreeKey{}, tree)
+	}
+	f := &inFlightInstall{ready: new(sync.Mutex), done: make(chan struct{}), tree: tree}
+	f.ready.Lock() // block calls to iterator
+	m.iterators.m[pkgID] = f
 	m.iterators.Unlock()
 
-	return m.download(ctx, pkgID, version, tarfile, pw, key)
+	// pkgID was validated, so reading its in-use version cannot fail.
+	replaced, _, _ := m.PackageVersionInUse(ctx, pkgID)
+	return replaced, m.download(ctx, pkgID, version, tarfile, pw, key)
+}
+
+// closesWaitCycleLocked reports whether tree waiting for an install in
+// flight in owner would close a cycle of install trees waiting for each
+// other. That includes owner being tree: a tree makes one install at a
+// time, so its install in flight is an ancestor of the asking one.
+func (m *Manager) closesWaitCycleLocked(tree, owner *installTree) bool {
+	for t := owner; t != nil; t = m.iterators.waiting[t] {
+		if t == tree {
+			return true
+		}
+	}
+	return false
 }
 
 // DeletePackageVersion deletes a package version from local storage. This method is idempotent.
@@ -701,6 +777,21 @@ func (m *Manager) isPackageVersionInUse(
 	return
 }
 
+// versionInstalled reports whether version of pkgID is fully installed.
+func (m *Manager) versionInstalled(
+	ctx context.Context, pkgID string, version release.Version,
+) (bool, error) {
+	var val pkgVersionValue
+	err := m.storage.Get(ctx, m.makeDownloadKey(pkgID, version), &val)
+	if errors.Is(err, storageapi.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return val.Complete, nil
+}
+
 func (m *Manager) cleanupFile(file *os.File) {
 	if err := file.Close(); err != nil {
 		m.log(log.WarnLevel, "close temp tar file: %v", err)
@@ -838,13 +929,18 @@ func (m *Manager) runDownload(
 	return nil
 }
 
-// installRequirements installs the Rune packages listed under the
-// top-level `requirements` key of the staged package config. It runs
-// before the dependent package is promoted so each requirement's full
-// install — including its config merge and gui.env live-apply —
-// completes first and the dependent extension starts with the
-// requirement's environment in place. A failed requirement install
-// aborts the dependent install.
+// installRequirements installs, or upgrades to their latest version,
+// the Rune packages listed under the top-level `requirements` key of
+// the staged package config, and reports each change with
+// ReportRequirement. It runs before the dependent package is promoted
+// so each requirement's full install — including its config merge and
+// gui.env live-apply — completes first and the dependent extension
+// starts with the requirement's environment in place. A requirement
+// whose latest version is installed but not in use was pinned by the
+// user and stays put. A requirement in flight in another install is
+// waited for, unless that install waits for this one, as in a cycle of
+// requirements. A failed requirement install aborts the dependent
+// install.
 func (m *Manager) installRequirements(
 	ctx context.Context, pkgID string, version release.Version,
 	configFile string, pw repl.ProgressWriter,
@@ -872,24 +968,47 @@ func (m *Manager) installRequirements(
 		if req == pkgID {
 			continue
 		}
-		_, installed, err := m.PackageVersionInUse(ctx, req)
+		inUse, installed, err := m.PackageVersionInUse(ctx, req)
 		if err != nil {
 			return fmt.Errorf("requirement %s in use: %w", req, err)
 		}
-		if installed {
-			continue
-		}
-		reqVersion, err := m.LatestVersion(ctx, req)
+		latest, err := m.LatestVersion(ctx, req)
 		if err != nil {
 			return fmt.Errorf("resolve requirement %s: %w", req, err)
 		}
-		m.log(log.InfoLevel, "installing requirement %s version %s of package %s",
-			req, reqVersion, pkgID)
-		err = m.InstallPackageVersion(ctx, req, reqVersion,
+		if installed && inUse == latest {
+			continue
+		}
+		if installed {
+			pinned, err := m.versionInstalled(ctx, req, latest)
+			if err != nil {
+				return fmt.Errorf("requirement %s installed: %w", req, err)
+			}
+			if pinned {
+				m.log(log.InfoLevel, "leaving requirement %s of package %s at %s: "+
+					"%s is installed but not in use", req, pkgID, inUse, latest)
+				continue
+			}
+			m.log(log.InfoLevel, "upgrading requirement %s from %s to %s for package %s",
+				req, inUse, latest, pkgID)
+		} else {
+			m.log(log.InfoLevel, "installing requirement %s version %s of package %s",
+				req, latest, pkgID)
+		}
+		replaced, err := m.install(ctx, req, latest,
 			requirementProgressWriter{pkgID: req, pw: pw})
-		if err != nil && !errors.Is(err, ErrAlreadyInstalled) {
+		switch {
+		case errors.Is(err, errInstallInFlight), errors.Is(err, ErrAlreadyInstalled):
+			// req is in flight in an install waiting for this one, which
+			// finishes it, or the install of req this one waited for
+			// installed latest and reported it.
+			continue
+		case err != nil:
 			return fmt.Errorf("install requirement %s: %w", req, err)
 		}
+		ReportRequirement(m.ui(ctx), pw, RequirementChange{
+			Package: req, From: replaced, To: latest, RequiredBy: pkgID,
+		})
 	}
 	return nil
 }
@@ -918,12 +1037,13 @@ func (m *Manager) finishDownload(pkgID string) {
 	m.iterators.Lock()
 	defer m.iterators.Unlock()
 
-	ready, ok := m.iterators.m[pkgID]
+	f, ok := m.iterators.m[pkgID]
 	if !ok {
 		panic("iterator for package not found")
 	}
 	delete(m.iterators.m, pkgID)
-	ready.Unlock()
+	f.ready.Unlock()
+	close(f.done)
 }
 
 func (m *Manager) abortDownload(

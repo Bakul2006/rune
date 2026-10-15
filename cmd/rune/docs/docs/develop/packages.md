@@ -122,9 +122,10 @@ When a user installs one, Rune:
 
 1. **Installs required packages first.** If the package's config declares a
    top-level `requirements:` list, Rune resolves each named package to its
-   latest version and installs any that are not already installed, config
-   merge and environment included, before the package itself. If a requirement
-   cannot be installed, the whole install is aborted.
+   latest version and installs it, or upgrades it to that version, config
+   merge and environment included, before the package itself. Each
+   requirement installed or upgraded is listed in the console output. If a
+   requirement cannot be installed or upgraded, the whole install is aborted.
 2. **Puts executables on the `PATH`.** Every executable in the package's
    top-level `bin/` directory is copied into Rune's shared binary directory,
    which is always first on the `PATH` of Rune's terminals and of anything
@@ -229,8 +230,13 @@ At install time, each requirement is resolved to its latest version and
 installed in full before the declaring package, so anything the requirement
 contributes (executables on the `PATH`, environment variables from its
 overlay) is in place by the time the declaring package starts anything.
-A requirement that is already installed is left at its installed version.
-If a requirement fails to install, the declaring package's install is
+A requirement that is already installed at an older version is upgraded to
+the latest one. A requirement the user switched away from its latest version
+with `pkg use` stays where it is until a newer version is published. Each
+requirement installed or upgraded is listed in the console output, or shown
+as a notification when the install did not come from the console, for example
+when the user accepted an editor's prompt to install a language package. If a
+requirement fails to install or upgrade, the declaring package's install is
 aborted.
 
 ### Registering an extension

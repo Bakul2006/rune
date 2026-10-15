@@ -60,7 +60,7 @@ func TestValidatePkgPath(t *testing.T) {
 }
 
 func ghPkgTarball(t *testing.T) []byte {
-	return makeReqPkgTarball(t, map[string]string{
+	return idepkgtest.MakeTarball(t, map[string]string{
 		"config.yaml": "extensions:\n  demo:\n" +
 			"    path: $RUNE_DATADIR/lib/$RUNE_PKG_ID/main.py\n",
 		"main.py": "print('hi')\n",
@@ -115,13 +115,13 @@ func TestInstallGitHubID(t *testing.T) {
 			[]release.Bundle{{Package: depID, Version: "1"}},
 		)
 		m, n, rm, _ := newTestManager(t, pkgs, versions)
-		rm.SetTarball(ghPkgID, makeReqPkgTarball(t, map[string]string{
+		rm.SetTarball(ghPkgID, idepkgtest.MakeTarball(t, map[string]string{
 			"config.yaml": "requirements:\n  - " + depID + "\n" +
 				"extensions:\n  demo:\n" +
 				"    path: $RUNE_DATADIR/lib/$RUNE_PKG_ID/main.py\n",
 			"main.py": "print('hi')\n",
 		}))
-		rm.SetTarball(depID, makeReqPkgTarball(t, map[string]string{
+		rm.SetTarball(depID, idepkgtest.MakeTarball(t, map[string]string{
 			"lib/python.txt": "python\n",
 		}))
 
