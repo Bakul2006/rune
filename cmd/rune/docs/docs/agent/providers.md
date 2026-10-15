@@ -24,7 +24,7 @@ Rune has six built-in cloud providers:
 | **Anthropic** | API key | Claude family |
 | **Gemini** | API key | Gemini family |
 | **Bedrock** | Bedrock API key or your AWS credentials | Claude, Nova, Llama, Mistral, and DeepSeek families hosted on Amazon Bedrock |
-| **Codex** | Sign in with ChatGPT (OAuth) | GPT-5 Codex family |
+| **Codex** | Sign in with ChatGPT (OAuth) | GPT Codex family |
 | **Claude** | Sign in with Claude (OAuth) | Claude family through your Claude Pro/Max subscription |
 
 The first four are the basic cloud providers: you onboard each by pasting an
