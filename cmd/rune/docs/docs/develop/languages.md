@@ -351,7 +351,9 @@ workspace host that Rune passes in the extension's startup `Config`.
 The extension does not launch the language server and speak LSP itself. It asks
 Rune's LSP Manager to do that through the SDK's `semanticapi.LSP` client. Rune
 owns the server process, routes editor requests to it, restarts or stops it with
-the workspace, and keeps LSP concerns out of the extension process.
+the workspace, and keeps LSP concerns out of the extension process. Rune also
+identifies itself to every server by sending `clientInfo` with the name `rune`,
+so extensions do not set it.
 
 At the end of your per-project bring-up, build an
 [`InitializeParams`](https://github.com/unstablebuild/rune-go-sdk/blob/main/api/semanticapi/lsp.go)

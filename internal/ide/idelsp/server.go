@@ -32,10 +32,29 @@ import (
 	"github.com/unstablebuild/rune-go-sdk/api/schemeapi"
 	"github.com/unstablebuild/rune-go-sdk/api/semanticapi"
 	"github.com/unstablebuild/rune-go-sdk/api/workspaceapi"
+	"unstable.build/rune/internal/debug"
 	"unstable.build/rune/internal/ide/idelsp/jsonrpc2"
 	"unstable.build/rune/internal/ide/procattr"
 	"unstable.build/rune/internal/workspace/processctx"
 )
+
+// lspClientName is sent as clientInfo.name in every initialize request.
+// Language servers key client-specific behavior and usage telemetry off
+// it (gopls counts gopls/client:rune), so it must not change.
+const lspClientName = "rune"
+
+// initializeRequest is the wire form of the initialize params. clientInfo
+// identifies the editor rather than the extension that asked for the
+// server, so rune always sets it instead of taking it from the extension.
+type initializeRequest struct {
+	semanticapi.InitializeParams
+	ClientInfo lspClientInfo `json:"clientInfo"`
+}
+
+type lspClientInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
 
 // server is the routing-facing contract the Manager uses to talk
 // to a language backend. A backend is either a single langServer
@@ -307,7 +326,11 @@ func (s *langServer) initialize(ctx context.Context) (
 ) {
 
 	s.log.Debug("rpc call", "method", "initialize")
-	err = s.conn.Call(ctx, "initialize", s.params).Await(ctx, &response)
+	req := initializeRequest{
+		InitializeParams: s.params,
+		ClientInfo:       lspClientInfo{Name: lspClientName, Version: debug.Tag},
+	}
+	err = s.conn.Call(ctx, "initialize", req).Await(ctx, &response)
 	if err != nil {
 		return
 	}
