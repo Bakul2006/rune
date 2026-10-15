@@ -122,9 +122,11 @@ func TestExtractFileGo(t *testing.T) {
 			{"mylib.MyType", symbolresolve.SymbolDef}:              1,
 			{"mylib.MyFunc", symbolresolve.SymbolDef}:              1,
 			{"mylib.New", symbolresolve.SymbolDef}:                 1,
+			{"mylib.Store", symbolresolve.SymbolDef}:               1,
 			{"mylib.MyType.String", symbolresolve.SymbolMethodDef}: 1,
 			{"mylib.MyType.Set", symbolresolve.SymbolMethodDef}:    1,
-		}, occs, "unexportedHelper must be excluded")
+			{"mylib.Store.Load", symbolresolve.SymbolMethodDef}:    1,
+		}, occs, "unexportedHelper and Store.save must be excluded")
 		assert.Empty(t, ext.Imports)
 	})
 

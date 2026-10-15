@@ -221,6 +221,8 @@ func TestGoE2E(t *testing.T) {
 			resolveURIs(t, env.p, "mylib.MyType.String"))
 		assert.Equal(t, []string{env.uri(t, "mylib/mylib.go")},
 			resolveURIs(t, env.p, "mylib.MyType.Set"))
+		assert.Equal(t, []string{env.uri(t, "mylib/mylib.go")},
+			resolveURIs(t, env.p, "mylib.Store.Load"))
 	})
 
 	t.Run("unexported and constants are not indexed", func(t *testing.T) {
@@ -281,11 +283,12 @@ func TestGoE2E(t *testing.T) {
 			"iter.Iterator", "iter.OnlyDefined", "iter.Aggregate",
 			"iterator.Iterator",
 			"mylib.MyType.String", "mylib.MyType.Set",
+			"mylib.Store.Load",
 		} {
 			assert.Truef(t, got[name], "expected %q to be listed", name)
 		}
 		for _, name := range []string{
-			"mylib.unexportedHelper", "iter.privateOnlyDefined",
+			"mylib.unexportedHelper", "iter.privateOnlyDefined", "mylib.Store.save",
 		} {
 			assert.Falsef(t, got[name], "%q must not be listed", name)
 		}
