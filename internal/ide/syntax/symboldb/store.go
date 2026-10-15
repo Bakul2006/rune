@@ -123,6 +123,7 @@ type fileDoc struct {
 	Path    string
 	ModTime int64
 	Version int
+	Grammar string
 	Names   []string
 	Imports map[string]string
 }

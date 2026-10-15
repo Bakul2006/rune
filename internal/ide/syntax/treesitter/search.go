@@ -19,6 +19,8 @@ package treesitter
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -500,6 +502,48 @@ func (p Parser) ListReferencedSymbols(
 	})
 
 	return it, nil
+}
+
+// GrammarFingerprint identifies the grammar and locals query installed
+// for langID: two fingerprints are equal exactly when both files are
+// byte-identical, wherever they are installed. It fails when the
+// language package or either file is not installed.
+func (p Parser) GrammarFingerprint(ctx context.Context, langID string) (string, error) {
+	it, err := p.pkg.LibDir(ctx, langID)
+	if err != nil {
+		return "", errNotInstalled
+	}
+	files, err := iterator.ToSlice(ctx, it)
+	_ = it.Close()
+	if err != nil {
+		return "", fmt.Errorf("list files: %w", err)
+	}
+	paths := make(map[string]string, 2)
+	for _, path := range files {
+		switch name := filepath.Base(path); name {
+		case ParserFilename, LocalsFilename:
+			paths[name] = path
+		}
+	}
+	h := sha256.New()
+	for _, name := range []string{ParserFilename, LocalsFilename} {
+		path, ok := paths[name]
+		if !ok {
+			return "", errNotInstalled
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return "", fmt.Errorf("open %s: %w", name, err)
+		}
+		_, _ = io.WriteString(h, name)
+		_, _ = h.Write([]byte{0})
+		_, err = io.Copy(h, f)
+		_ = f.Close()
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", name, err)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)[:16]), nil
 }
 
 // qualifierContext builds a fresh per-call qualifier context over the
