@@ -27,9 +27,9 @@ the code.
 
 - **A Rune account.** Run `login` in the [Rune console](./console.md) to
   sign in; Rune offers to sign you in or sign you up when you are not.
-  The free plan covers 2 machines on the network, and a paid plan covers
-  as many as you like. When a third machine tries to join a free
-  account, Rune offers to upgrade and points you at `network remove`;
+  Free covers up to 2 nodes on the network, Rune Pro covers up to 10,
+  and Enterprise includes unlimited nodes. If your account reaches its
+  limit, remove a node with `network remove` or upgrade your plan;
   after upgrading, run `login` again so the machine picks up the new
   plan.
 - **Rune running on both machines, signed into the same account.** A
@@ -75,9 +75,21 @@ run it as `network <subcommand>`, or submit a one-off from the
 
 ## How many machines you can have
 
-The free plan covers 2 machines. A third one is turned away when it asks
-to join, with the offer to upgrade or to make room. `network machines`
-shows what is registered to your account:
+Each machine registered to Rune Network is a node. The limits are:
+
+| Plan | Network nodes |
+| --- | --- |
+| Free | Up to 2 |
+| Rune Pro | Up to 10 |
+| Enterprise | Unlimited |
+
+Rune Pro also includes premium support. Enterprise includes the option to
+run Rune's networking stack on-prem. See the [pricing page](https://rune.build/pricing)
+for the current plan details.
+
+When your account reaches its limit, another machine cannot join until
+you remove one or upgrade. `network machines` shows what is registered
+to your account:
 
 ```
 network machines
@@ -101,7 +113,8 @@ account's list, so there is nothing to type from memory.
 
 The machine keeps working locally; it is only unregistered from the
 network. Running `network up` on it registers it again, which takes a
-slot back. A paid plan has no limit, so nothing has to be removed.
+slot back. Free and Rune Pro accounts have node limits even when a
+registered machine is offline. Enterprise has no node limit.
 
 A removed machine that is running and online is told right away: Rune
 there shows **"This machine has been removed from the network."** One
@@ -332,8 +345,9 @@ Use `rune://` for your own machines.
 signed in on this machine. Choose **Sign in**, or **Sign up** to create
 an account.
 
-**"The free Rune plan includes 2 machines on the network."** Your
-account already has as many machines registered as the free plan covers.
+**The account has reached its node limit.** Free allows up to 2 nodes;
+Rune Pro allows up to 10. On Free, the message reads **"The free Rune
+plan includes 2 machines on the network."**
 Run `network machines` to see them and `network remove <machine>` to
 free a slot, or choose **Upgrade**. After upgrading, run `login` again
 so this machine picks up the change.

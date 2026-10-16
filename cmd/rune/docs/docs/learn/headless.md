@@ -419,7 +419,9 @@ in from scratch, as in [Before you install the
 service](#before-you-install-the-service) or [Docker](#docker), and
 joins as a new machine:
 the old one stays in `network machines` as offline until you
-`network remove` it, and on a free plan holds its slot until then.
+`network remove` it, and on Free or Rune Pro holds its slot until then.
+The [network limits](./network.md#how-many-machines-you-can-have) are
+2 nodes on Free, 10 on Rune Pro, and unlimited on Enterprise.
 
 ## Troubleshooting
 
@@ -434,7 +436,8 @@ next try; check `network peers` from another machine a minute later.
 line. `the network links the machines of one Rune account` means the
 cached sign-in no longer works: sign in again as described above. `the
 free Rune plan includes 2 machines` means the account is full: free a
-slot with `network remove` from another machine, or upgrade.
+slot with `network remove` from another machine, or upgrade. Rune Pro
+also has a limit, at 10 nodes; Enterprise has unlimited nodes.
 
 **Tools are missing in a `rune://` terminal.** A terminal is a login
 shell: it builds `PATH` from your startup files, then puts the tools Rune
