@@ -231,6 +231,17 @@ func TestToolCallPreviewMarkdown(t *testing.T) {
 			want:    "# skill\n\n## Result\n\n# Research\n\n**Findings**\n",
 		},
 		{
+			name: "agent prompt is highlighted as literal markdown",
+			details: dialoguetui.ToolCallDetails{
+				Name: "agent", Summary: "Review changes",
+				Args:   `{"subagent_type":"explore","description":"Review changes","prompt":"# not a heading\n1. Run ` + "`git diff`" + `"}`,
+				Output: "# Findings", Done: true, MarkdownOutput: true,
+			},
+			want: "# agent\n\n" + block("markdown", "# not a heading\n1. Run `git diff`") +
+				"## Arguments\n\n" + block("json", "{\n  \"description\": \"Review changes\",\n  \"subagent_type\": \"explore\"\n}") +
+				"## Result\n\n# Findings\n",
+		},
+		{
 			name:    "agent error is literal",
 			details: dialoguetui.ToolCallDetails{Name: "agent", Output: "# failed", Done: true, IsError: true, MarkdownOutput: true},
 			want:    "# agent\n\n## Error\n\n" + block("text", "# failed"),

@@ -373,8 +373,8 @@ type toolPreviewField struct {
 }
 
 // toolPreview specializes the preview of a tool whose arguments or
-// response carry code or terminal output, which reads poorly as an
-// escaped JSON string.
+// response carry code, terminal output or multi-line prose, which reads
+// poorly as an escaped JSON string.
 type toolPreview struct {
 	args, output toolPreviewField
 }
@@ -383,6 +383,7 @@ type toolPreview struct {
 // expected shape, such as arguments that are still streaming in or an
 // error message in place of a JSON response, gets the generic preview.
 var toolPreviews = map[string]toolPreview{
+	"agent":          {args: toolPreviewField{"prompt", "markdown"}},
 	"bash":           {args: toolPreviewField{"command", "bash"}},
 	"run_command":    {args: toolPreviewField{"CommandLine", "bash"}},
 	"exec_command":   {args: toolPreviewField{"cmd", "bash"}, output: toolPreviewField{"output", "text"}},

@@ -1067,12 +1067,13 @@ func TestTurnChildResultPreviewUsesParentInvocation(t *testing.T) {
 	got, ok := turn.ToolCallAt(findText(t, w, 60, "# Full findings"))
 	assert.True(t, ok)
 	assert.Equal(t, "skill", got.Name)
-	assert.Equal(t, `{"name":"explore"}`, got.Args)
+	assert.Empty(t, got.Args, "result leaf opens on the response alone")
 	assert.Equal(t, "# Full findings\n\nMore details", got.Output)
 	assert.True(t, got.MarkdownOutput)
 	assert.Equal(t, "# Full findings", turn.tools["parent"].childTurn.tools["parent:result"].name)
 	parent, ok := turn.ToolCallAt(findText(t, w, 60, "skill"))
 	assert.True(t, ok)
+	assert.Equal(t, `{"name":"explore"}`, parent.Args)
 	assert.Equal(t, parent.Key, got.Key, "result leaf previews its parent's response")
 }
 

@@ -95,6 +95,8 @@ type toolNode struct {
 
 // ToolCallDetails is a snapshot of an invocation and its full response.
 // Output may be empty even after completion when a tool returns no text.
+// A sub-agent result row leaves Args empty so its preview opens on the
+// response rather than on a possibly long prompt.
 type ToolCallDetails struct {
 	Key                         ToolCallKey
 	Name, Args, Summary, Output string
@@ -114,7 +116,7 @@ func (tn *toolNode) details() ToolCallDetails {
 	if tn.resultOf != nil {
 		return ToolCallDetails{
 			Key:  ToolCallKey{tn.resultOf},
-			Name: tn.resultOf.name, Args: tn.resultOf.args, Output: tn.output,
+			Name: tn.resultOf.name, Output: tn.output,
 			Done: true, IsError: tn.isError, MarkdownOutput: true,
 		}
 	}
